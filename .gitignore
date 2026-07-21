@@ -1,0 +1,23 @@
+# build scratch / decode staging
+pak/staging/**
+!pak/staging/.gitkeep
+work/
+*.tmp
+
+# C# build output
+tools/skillpatch/bin/
+tools/skillpatch/obj/
+
+# decoded game assets must NOT be committed (copyrighted) — only our authored/patched assets
+*.uasset.orig
+*.uexp
+*.ubulk
+
+# external tools (fetched per-machine)
+tools/retoc/
+*.usmap
+
+# dist is built output; keep the folder, ignore heavy binaries until we choose to ship
+dist/**/*.ucas
+dist/**/*.utoc
+dist/**/*.pak
