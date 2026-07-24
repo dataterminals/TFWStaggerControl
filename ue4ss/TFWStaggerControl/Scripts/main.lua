@@ -4,9 +4,10 @@
 -- (Part 1) and (2) owned resistance skill tags (Part 2 graded/per-type). The static pak works without
 -- this file; this file adds per-type selectivity and graded % that pure data can't express.
 --
--- STATUS: first cut. The exact UFunction signatures below need to be confirmed ON-BOX with RE-UE4SS
--- (ConsoleCommandsMod: `dump_object`, and `FindAllOf`). Search points marked  >>> CONFIRM ON-BOX.
--- Reference for TFW UE4SS idioms: FWBehaviorLab/mods/FWStealth/Scripts/main.lua.
+-- STATUS: diagnostic-first. Hook targets still need ON-BOX confirmation, but this build LOGS what it
+-- sees each launch (mod-load banner, FindAllOf probe, per-hit "activate:" lines) so a single run tells
+-- us whether the K2_ActivateAbility hook is the right seam or we must pivot (montage hook / loose tag).
+-- Tools on-box: ConsoleCommandsMod `dump_object`/`set`, `FindAllOf`. Idioms: FWStealth, TFWQuestHUDToggle.
 
 local cfg = require("config")
 
@@ -109,37 +110,51 @@ local function should_block(ability)
 end
 
 -- ---------------------------------------------------------------------------
--- hook
+-- hook + on-box diagnostics
 -- ---------------------------------------------------------------------------
--- Strategy: intercept the hit-react ability activation and cancel/no-op it when should_block() is true.
--- We hook a UFunction on the ability. GA activation is often native; the reliable BP entry is the
--- ability's ActivateAbility / K2_ActivateAbility.  >>> CONFIRM ON-BOX which one fires:
---   dump_object on a live GA_Player_HitReaction_C instance and check its functions.
--- Alternative if activation can't be cancelled cleanly: on ClientRestart, add the loose tag
--- Ability.HitReactionBlocked to the player ASC for `mode=="blanket"` (lets the shipping gate do it),
--- and for selective mode toggle that loose tag per-hit just-in-time.
+-- Strategy: intercept the hit-react ability activation and cancel it when should_block() is true.
+-- GA activation is often native; the reliable BP entry is K2_ActivateAbility ON THE GENERATED CLASS
+-- (a BlueprintImplementableEvent overridden in a BP is a *distinct* UFunction from the engine base),
+-- which is why we register both the base and the full BP path below.  >>> CONFIRM ON-BOX which fires.
+--
+-- This build is DIAGNOSTIC-FIRST: one launch answers the three open questions via UE4SS.log —
+--   (1) does the mod load?                    -> the "loaded" banner
+--   (2) is the ability discoverable + real name? -> the probe() lines on each respawn
+--   (3) does the activation hook fire on a hit?  -> "activate: class=..." lines while you stagger
+-- If (3) never logs a hit-react while you visibly stagger, activation is native (no BP override): pivot
+-- to hooking the montage UFunction it calls (dump_object a live GA_Player_HitReaction_C) or to granting
+-- the loose Ability.HitReactionBlocked tag so the shipping gate blocks it (see docs/design-notes.md).
 
 local HOOK_TARGETS = {
-    "/Script/Engine.GameplayAbility:K2_ActivateAbility",
-    -- fallbacks to try on-box:
-    -- "/Script/GameplayAbilities.GameplayAbility:ActivateAbility",
-    -- a montage-play UFunction inside GA_Player_HitReaction_C
+    "/Script/GameplayAbilities.GameplayAbility:K2_ActivateAbility",  -- engine base UFunction (module fixed: was /Script/Engine)
+    "/Game/FW/Player/GameplayAbilities/GA_Player_HitReaction.GA_Player_HitReaction_C:K2_ActivateAbility",  -- BP-generated override
+    -- fallbacks to try on-box if neither fires (fully native activation):
+    -- a montage-play UFunction inside GA_Player_HitReaction_C, found via dump_object.
 }
 
-local function is_our_ability(ctx)
+-- Class name of the object a hook fired on (the ability). nil on failure.
+local function activating_class_name(ctx)
     local ok, name = pcall(function() return ctx:get():GetClass():GetFName():ToString() end)
-    return ok and name == HITREACT_ABILITY_CLASS
+    return ok and name or nil
 end
 
 local function install_hooks()
     for _, target in ipairs(HOOK_TARGETS) do
         local ok = pcall(function()
             RegisterHook(target, function(self)
-                if not is_our_ability(self) then return end
+                local cls = activating_class_name(self)
+                -- DIAGNOSTIC: surface any hit-reaction-ish activation (catches renames too) without
+                -- flooding the log with every ability the game fires.
+                local low = tostring(cls):lower()
+                if low:find("hitreact", 1, true) or low:find("reaction", 1, true) then
+                    log(("activate: class=%s  via %s"):format(tostring(cls), target))
+                end
+                if cls ~= HITREACT_ABILITY_CLASS then return end
                 local ability = self:get()
                 if should_block(ability) then
-                    log("SUPPRESS hit-react")
-                    pcall(function() ability:K2_EndAbility() end)   -- >>> CONFIRM: EndAbility vs CancelAbility
+                    log("SUPPRESS hit-react — cancelling")
+                    local okc = pcall(function() ability:K2_CancelAbility() end)
+                    if not okc then pcall(function() ability:K2_EndAbility() end) end   -- >>> CONFIRM: cancel vs end
                 end
             end)
         end)
@@ -147,14 +162,47 @@ local function install_hooks()
     end
 end
 
--- Install after the game/player is up. ClientRestart is the TFW-idiomatic re-init point (see FWStealth).
+-- DIAGNOSTIC probe: confirm the hit-react ability class is discoverable and log its identity, so one
+-- launch pins down the real names even if the activation hook never fires. FindAllOf is the proven
+-- discovery idiom in this game (FWStealth / TFWQuestHUDToggle).
+local function probe()
+    for _, cls in ipairs({ HITREACT_ABILITY_CLASS, "FWPlayerGA_HitReaction" }) do
+        local found = FindAllOf(cls)
+        if not found then
+            log(("probe: FindAllOf(%s) -> none live yet"):format(cls))
+        else
+            local n, sample = 0, nil
+            for _, o in pairs(found) do
+                if o:IsValid() then
+                    n = n + 1
+                    if not sample then
+                        local okn, full = pcall(function() return o:GetFullName() end)
+                        sample = okn and full or "?"
+                    end
+                end
+            end
+            log(("probe: FindAllOf(%s) -> %d live (e.g. %s)"):format(cls, n, tostring(sample)))
+        end
+    end
+end
+
+-- Install hooks exactly once. ClientRestart fires on every respawn/level load, so re-registering there
+-- would stack duplicate hooks; use it only to (re)run the discovery probe.
+local hooks_installed = false
+local function install_once()
+    if hooks_installed then return end
+    hooks_installed = true
+    install_hooks()
+end
+
 local ok = pcall(function()
     RegisterHook("/Script/Engine.PlayerController:ClientRestart", function()
-        log("player restart — (re)installing hooks; mode=" .. cfg.mode)
-        install_hooks()
+        log("player restart; mode=" .. cfg.mode)
+        install_once()
+        ExecuteWithDelay(1500, function() ExecuteInGameThread(probe) end)  -- defer: defs load lazily
     end)
 end)
-if not ok then log("WARNING: could not register ClientRestart hook; trying immediate install") end
-install_hooks()
+if not ok then log("WARNING: could not register ClientRestart hook; installed hooks immediately") end
+install_once()
 
-log("loaded. mode=" .. cfg.mode .. " (set to 'blanket' first to smoke-test the seam)")
+log("loaded. mode=" .. cfg.mode .. " (blanket = suppress ALL hit-react; watch UE4SS.log for probe/activate lines)")

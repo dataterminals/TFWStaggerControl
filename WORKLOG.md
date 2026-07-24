@@ -1,5 +1,28 @@
 # WORKLOG
 
+## 2026-07-24 — smoke test never actually ran; hardened the blanket path into a diagnostic
+
+**Finding (corrects the record).** Today's 11:42 `UE4SS.log` shows the loader enumerating the game's
+`ue4ss\Mods\` and starting `TFWWorkbench` + `TFWQuestHUDToggle` — but **not `TFWStaggerControl`**. The mod
+was staged in MO2 but never *enabled*, so Root Builder didn't deploy it. The seam smoke test is therefore
+still **unrun** — any "did I stagger?" impression from that session is meaningless for us. Staging itself is
+correct (blanket mode, proper Root Builder layout, staged `main.lua` == repo).
+
+**Changed `main.lua`** (grounded in the two working in-instance mods, FWStealth / TFWQuestHUDToggle):
+- Fixed a real bug — hook module was `/Script/Engine.GameplayAbility` → **`/Script/GameplayAbilities.GameplayAbility`**.
+- Added the BP-generated class path as a 2nd target (a BP-overridden `K2_ActivateAbility` is a *distinct*
+  UFunction from the engine base, so the base hook may miss it).
+- Made blanket mode **diagnostic-first**: logs every hit-reaction-ish activation (`activate: class=…`), and a
+  `probe()` (`FindAllOf` on `GA_Player_HitReaction_C` + `FWPlayerGA_HitReaction`) runs on each ClientRestart.
+  One launch now answers: (1) mod loads? (2) ability discoverable + real name? (3) does the hook fire on a hit?
+- Install-once guard (ClientRestart was re-registering hooks every respawn → duplicate stacking).
+- Suppression now `K2_CancelAbility` (fallback `K2_EndAbility`). `luac -p` clean; re-staged to MO2.
+
+**Blocker unchanged, now teed up.** Enable TFWStaggerControl in MO2 (F5 → tick the box; MO2 is open so don't
+touch `modlist.txt`), launch, take an explosion/melee hit, read `UE4SS.log`. The probe/activate lines decide
+the next step: hook fires + stagger stops → finish the pak; hook never fires while you stagger → activation is
+native → pivot to the montage hook or the loose-tag grant.
+
 ## 2026-07-20 — recon + scaffold (build 24097213 / 0.9.3.9.2)
 
 Decoded the player stagger + skill systems from the shipped paks (4-way parallel datamine investigation).

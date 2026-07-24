@@ -21,3 +21,4 @@ tools/retoc/
 dist/**/*.ucas
 dist/**/*.utoc
 dist/**/*.pak
+dist/**/*.zip
