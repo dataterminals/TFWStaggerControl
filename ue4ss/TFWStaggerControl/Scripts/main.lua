@@ -16,7 +16,9 @@ local HITREACT_EVENT_TAG     = "Event.HitReaction.Player.Weapon"  -- what trigge
 local BLOCK_TAG              = "Ability.HitReactionBlocked"        -- the shipping ActivationBlockedTag
 
 local function log(msg)
-    if cfg.debug then print("[TFWStaggerControl] " .. msg) end
+    -- UE4SS Lua print does not append a newline; add one so each line stands alone in UE4SS.log
+    -- (matches the working FWStealth / TFWQuestHUDToggle idiom).
+    if cfg.debug then print("[TFWStaggerControl] " .. msg .. "\n") end
 end
 
 -- ---------------------------------------------------------------------------
@@ -138,71 +140,111 @@ local function activating_class_name(ctx)
     return ok and name or nil
 end
 
+-- PART 1 — capture the incoming damage TYPE. The decoded BP_PlayerBase shows the real UDamageType
+-- (BP_MeleeDamage_FW, BP_ExplosiveDamage_FW, …) arrives in the player's ReceiveAnyDamage, which maps it and
+-- SendGameplayEventToActor(Event.HitReaction.Player.Weapon) to fire the ability. The type is NOT on the
+-- ability (v0.1.2 confirmed the payload only carries the generic tag), so we grab it one step upstream:
+-- hook ReceiveAnyDamage, stash the type, and read it back in the hit-react hook microseconds later.
+-- Params verbatim from the dump: (Damage, DamageType, InstigatedBy, DamageCauser).
+local DAMAGE_HOOK    = "/Game/FW/Player/BP_PlayerBase.BP_PlayerBase_C:ReceiveAnyDamage"
+local last_damage    = { name = nil, family = "unknown" }   -- set on each incoming hit, read by the hit-react hook
+local damage_hook_ok = false
+
+local function on_receive_any_damage(self, Damage, DamageType)
+    local name
+    pcall(function()
+        local dt = DamageType:get()
+        if dt and dt:IsValid() then name = dt:GetClass():GetFName():ToString() end
+    end)
+    if not name then return end
+    last_damage.name = name
+    last_damage.family = classify_damage(name)
+    log(("damage: type=%s family=%s"):format(name, last_damage.family))
+end
+
+local function install_damage_hook()
+    if damage_hook_ok then return end
+    local ok = pcall(function() RegisterHook(DAMAGE_HOOK, on_receive_any_damage) end)
+    damage_hook_ok = ok
+    log((ok and "hooked " or "FAILED to hook (will retry after the pawn loads) ") .. DAMAGE_HOOK)
+end
+
+local hook_ok = {}   -- target -> true once RegisterHook succeeds, so we retry only the ones that failed
+
 local function install_hooks()
     for _, target in ipairs(HOOK_TARGETS) do
-        local ok = pcall(function()
-            RegisterHook(target, function(self)
-                local cls = activating_class_name(self)
-                -- DIAGNOSTIC: surface any hit-reaction-ish activation (catches renames too) without
-                -- flooding the log with every ability the game fires.
-                local low = tostring(cls):lower()
-                if low:find("hitreact", 1, true) or low:find("reaction", 1, true) then
-                    log(("activate: class=%s  via %s"):format(tostring(cls), target))
-                end
-                if cls ~= HITREACT_ABILITY_CLASS then return end
-                local ability = self:get()
-                if should_block(ability) then
-                    log("SUPPRESS hit-react — cancelling")
-                    local okc = pcall(function() ability:K2_CancelAbility() end)
-                    if not okc then pcall(function() ability:K2_EndAbility() end) end   -- >>> CONFIRM: cancel vs end
-                end
+        if not hook_ok[target] then
+            local ok = pcall(function()
+                RegisterHook(target, function(self)
+                    local cls = activating_class_name(self)
+                    -- DIAGNOSTIC: surface any hit-reaction-ish activation (catches renames too) without
+                    -- flooding the log with every ability the game fires.
+                    local low = tostring(cls):lower()
+                    if low:find("hitreact", 1, true) or low:find("reaction", 1, true) then
+                        log(("activate: class=%s  via %s"):format(tostring(cls), target))
+                    end
+                    if cls ~= HITREACT_ABILITY_CLASS then return end
+                    local ability = self:get()
+                    -- Part 1: report the family captured upstream + what SELECTIVE mode WOULD decide (dry
+                    -- run — blanket still suppresses everything below, so behavior is unchanged and safe).
+                    local fam = last_damage.family or "unknown"
+                    local sel_block = (fam ~= "unknown") and (cfg.ignore_types[fam] == true)
+                    log(("hit-react: last_damage=%s family=%s selective_would_block=%s")
+                        :format(tostring(last_damage.name), fam, tostring(sel_block)))
+                    if should_block(ability) then
+                        log("SUPPRESS hit-react — cancelling")
+                        local okc = pcall(function() ability:K2_CancelAbility() end)
+                        if not okc then pcall(function() ability:K2_EndAbility() end) end   -- >>> CONFIRM: cancel vs end
+                    end
+                end)
             end)
-        end)
-        log((ok and "hooked " or "FAILED to hook ") .. target)
+            hook_ok[target] = ok
+            log((ok and "hooked " or "FAILED to hook (will retry after the ability class loads) ") .. target)
+        end
     end
 end
 
--- DIAGNOSTIC probe: confirm the hit-react ability class is discoverable and log its identity, so one
--- launch pins down the real names even if the activation hook never fires. FindAllOf is the proven
--- discovery idiom in this game (FWStealth / TFWQuestHUDToggle).
+-- DIAGNOSTIC probe: confirm the hit-react ability class is still discoverable and log its identity.
+-- FindAllOf is the proven discovery idiom in this game (FWStealth / TFWQuestHUDToggle).
 local function probe()
     for _, cls in ipairs({ HITREACT_ABILITY_CLASS, "FWPlayerGA_HitReaction" }) do
         local found = FindAllOf(cls)
         if not found then
             log(("probe: FindAllOf(%s) -> none live yet"):format(cls))
         else
-            local n, sample = 0, nil
+            local n, sample = 0, "?"
             for _, o in pairs(found) do
                 if o:IsValid() then
                     n = n + 1
-                    if not sample then
+                    if sample == "?" then
                         local okn, full = pcall(function() return o:GetFullName() end)
-                        sample = okn and full or "?"
+                        if okn and full then sample = full end
                     end
                 end
             end
-            log(("probe: FindAllOf(%s) -> %d live (e.g. %s)"):format(cls, n, tostring(sample)))
+            log(("probe: FindAllOf(%s) -> %d live (e.g. %s)"):format(cls, n, sample))
         end
     end
 end
 
--- Install hooks exactly once. ClientRestart fires on every respawn/level load, so re-registering there
--- would stack duplicate hooks; use it only to (re)run the discovery probe.
-local hooks_installed = false
-local function install_once()
-    if hooks_installed then return end
-    hooks_installed = true
-    install_hooks()
-end
-
+-- Per-target install is idempotent (hook_ok guard), so we re-run it on every ClientRestart to RETRY
+-- targets that couldn't resolve at mod-load — notably the BP class /Game/.../GA_Player_HitReaction_C,
+-- which isn't loaded until the player pawn exists. v0.1.0 (fenix) showed the engine-BASE
+-- K2_ActivateAbility hook registers but NEVER fires on a stagger, so either activation is native OR the
+-- base hook doesn't catch the BP's own K2_ActivateAbility override. The lazy BP-path hook decides it:
+-- if it fires -> we can suppress; if it registers yet stays silent while you stagger -> native, and we
+-- pivot (dump_object the live instance to find the montage/native seam; see docs/design-notes.md).
 local ok = pcall(function()
     RegisterHook("/Script/Engine.PlayerController:ClientRestart", function()
         log("player restart; mode=" .. cfg.mode)
-        install_once()
+        install_hooks()          -- GA activation hooks (retry until the ability class is loaded)
+        install_damage_hook()    -- ReceiveAnyDamage capture (retry until BP_PlayerBase is loaded)
         ExecuteWithDelay(1500, function() ExecuteInGameThread(probe) end)  -- defer: defs load lazily
     end)
 end)
-if not ok then log("WARNING: could not register ClientRestart hook; installed hooks immediately") end
-install_once()
+if not ok then log("WARNING: could not register ClientRestart hook") end
+install_hooks()
+install_damage_hook()
 
-log("loaded. mode=" .. cfg.mode .. " (blanket = suppress ALL hit-react; watch UE4SS.log for probe/activate lines)")
+log("loaded v0.1.3 (damage-type capture). mode=" .. cfg.mode
+    .. " — blanket still suppresses; now captures the UDamageType via ReceiveAnyDamage to enable per-type")

@@ -1,5 +1,31 @@
 # WORKLOG
 
+## 2026-07-24 (eve) — ✅ SEAM PROVEN in-game (via tester); per-type selectivity is next
+
+**The load-bearing assumption is now verified on an independent machine.** Across three fast tester cycles:
+- **v0.1.0** — engine-BASE `K2_ActivateAbility` hook registered but never fired on a stagger (two logs).
+- **v0.1.1** — added a *lazy retry* of the BP-generated-class hook (it fails at mod-load because the player
+  pawn doesn't exist yet). The retry registered `…GA_Player_HitReaction_C:K2_ActivateAbility` ~1 min after
+  load; it then **fired 5–6× on the tester's melee hits, each `SUPPRESS`'d — and melee stopped staggering.**
+
+So intercepting `GA_Player_HitReaction` and cancelling it **does** stop player stagger. Design validated.
+
+**Mechanism detail worth keeping:** the BP implements `K2_ActivateAbility`; hooking the engine BASE
+UFunction never catches the BP's override — you must hook the **generated class path**, and lazily (after
+the pawn loads). This is why v0.1.0 saw nothing.
+
+**Fall damage still staggers** — expected. Our trigger is `Event.HitReaction.Player.**Weapon**` (combat
+hit-react). Fall/hard-landing stagger is a separate path; out of scope unless we choose to hunt it.
+
+**Dead end removed:** v0.1.1's property sweep was junk — UE4SS returns a *non-nil placeholder* for missing
+fields, so all 11 montage-name guesses false-positived (`GetFullName` failed on every one). v0.1.2 drops it;
+any future reflection read now validates `IsValid()` + a real `GetFullName()` first.
+
+**Next (Deni's pick): per-type selectivity.** v0.1.2 keeps blanket suppression but logs the triggering
+payload (`CurrentEventData.*`, validated) on each caught hit, to test whether the damage family is reachable
+at hit-react time (design-notes open question #2). If it's not exposed there, we pivot to hooking the damage
+pipeline (where the `BP_*Damage_FW` type class is a parameter).
+
 ## 2026-07-24 — smoke test never actually ran; hardened the blanket path into a diagnostic
 
 **Finding (corrects the record).** Today's 11:42 `UE4SS.log` shows the loader enumerating the game's
