@@ -146,20 +146,53 @@ end
 -- ability (v0.1.2 confirmed the payload only carries the generic tag), so we grab it one step upstream:
 -- hook ReceiveAnyDamage, stash the type, and read it back in the hit-react hook microseconds later.
 -- Params verbatim from the dump: (Damage, DamageType, InstigatedBy, DamageCauser).
+--
+-- v0.1.4: fenix's first v0.1.3 round came back 9/9 `type=FWDamageType` — the native BASE class, never a
+-- BP_*Damage_FW subclass — and the hit-react never activated during that burst (cadence looked like
+-- autofire/DoT, not a grenade). Either those hits genuinely ship the base type, or the class is erased
+-- at this seam. Widen the capture to decide: damage amount, the type object's full name (CDO vs live
+-- instance) + its super class (the native FWKnockDownDamageType-vs-FWGameDamageType split may be the
+-- real signal), and the DamageCauser actor class+name (grenade/projectile/enemy — a usable per-type
+-- signal even if the damage class stays erased). Classification still keys off the type class alone;
+-- causer is LOG-ONLY until real names come back. Decision logic untouched (blanket still suppresses).
 local DAMAGE_HOOK    = "/Game/FW/Player/BP_PlayerBase.BP_PlayerBase_C:ReceiveAnyDamage"
 local last_damage    = { name = nil, family = "unknown" }   -- set on each incoming hit, read by the hit-react hook
 local damage_hook_ok = false
 
-local function on_receive_any_damage(self, Damage, DamageType)
-    local name
+local function on_receive_any_damage(self, Damage, DamageType, InstigatedBy, DamageCauser)
+    local amount
+    pcall(function() amount = Damage:get() end)
+
+    local type_name, type_full, type_super
     pcall(function()
         local dt = DamageType:get()
-        if dt and dt:IsValid() then name = dt:GetClass():GetFName():ToString() end
+        if dt and dt:IsValid() then
+            type_name = dt:GetClass():GetFName():ToString()
+            local okf, full = pcall(function() return dt:GetFullName() end)
+            if okf and type(full) == "string" then type_full = full end
+            local oks, sup = pcall(function() return dt:GetClass():GetSuperStruct():GetFName():ToString() end)
+            if oks and type(sup) == "string" then type_super = sup end
+        end
     end)
-    if not name then return end
-    last_damage.name = name
-    last_damage.family = classify_damage(name)
-    log(("damage: type=%s family=%s"):format(name, last_damage.family))
+
+    local causer_class, causer_name
+    pcall(function()
+        local c = DamageCauser:get()
+        if c and c:IsValid() then
+            causer_class = c:GetClass():GetFName():ToString()
+            causer_name  = c:GetFName():ToString()
+        end
+    end)
+
+    if not (type_name or causer_class) then return end
+    local family = classify_damage(type_name)
+    if type_name then
+        last_damage.name   = type_name
+        last_damage.family = family
+    end
+    log(("damage: amt=%s type=%s super=%s full=%s causer=%s (%s) family=%s"):format(
+        tostring(amount), tostring(type_name), tostring(type_super), tostring(type_full),
+        tostring(causer_class), tostring(causer_name), family))
 end
 
 local function install_damage_hook()
@@ -246,5 +279,6 @@ if not ok then log("WARNING: could not register ClientRestart hook") end
 install_hooks()
 install_damage_hook()
 
-log("loaded v0.1.3 (damage-type capture). mode=" .. cfg.mode
-    .. " — blanket still suppresses; now captures the UDamageType via ReceiveAnyDamage to enable per-type")
+log("loaded v0.1.4 (wide damage capture). mode=" .. cfg.mode
+    .. " — blanket still suppresses; per-hit log now carries amt/type/super/full/causer"
+    .. " (v0.1.3 live round: 9/9 hits were base FWDamageType and the hit-react never fired)")

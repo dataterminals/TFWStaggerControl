@@ -1,5 +1,28 @@
 # WORKLOG
 
+## 2026-07-26 — v0.1.3 live round: capture seam WORKS, but the type arrives ERASED; no control case
+
+First tester log with the ReceiveAnyDamage capture (fenix, one hub → Tunnel2 → hub cycle):
+
+- **Mechanics all green.** Both lazy hooks (`GA_Player_HitReaction_C:K2_ActivateAbility`,
+  `BP_PlayerBase_C:ReceiveAnyDamage`) registered on the first ClientRestart; the probe found the live
+  ability on all three spawns; the install-once guard held (no re-hook spam on later restarts).
+- **The bad news: 9/9 captured hits logged `type=FWDamageType family=other`** — the native BASE class,
+  never a `BP_*Damage_FW` subclass. Either those hits genuinely ship the base type, or the class is
+  erased by the time ReceiveAnyDamage runs. Can't tell from this round alone, because —
+- **No hit-react activation the whole session.** The 9 hits came as one rapid ~1.3 s burst (cadence
+  smells like autofire or a DoT tick, not a grenade); nothing tried to stagger him through our hooked
+  path, and there was no melee hit to serve as the known-good control. Fenix's "explosion and I haven't
+  staggered" therefore can't be attributed to the mod from this log — nothing was suppressed.
+- **v0.1.4 widens the capture to decide it:** damage amount, the type object's full name (CDO vs live
+  instance) + super class (the native `FWKnockDownDamageType`-vs-`FWGameDamageType` split may be the
+  real signal), and the `DamageCauser` actor class+name (grenade/projectile/enemy — a usable per-type
+  signal even if the damage class stays erased). Decision logic untouched: blanket still suppresses;
+  causer is log-only until real names come back.
+- **Next round ask (sent with the build):** in one session — melee ×2 (control), a NAMED point-blank
+  explosion ×2–3, plain rifle fire, plus one line giving the order. A visible stagger with no SUPPRESS
+  line would mean a second, un-hooked stagger path — also decisive.
+
 ## 2026-07-24 (eve) — ✅ SEAM PROVEN in-game (via tester); per-type selectivity is next
 
 **The load-bearing assumption is now verified on an independent machine.** Across three fast tester cycles:
