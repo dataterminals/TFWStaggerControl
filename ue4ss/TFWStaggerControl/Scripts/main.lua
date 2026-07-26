@@ -4,10 +4,12 @@
 -- (Part 1) and (2) owned resistance skill tags (Part 2 graded/per-type). The static pak works without
 -- this file; this file adds per-type selectivity and graded % that pure data can't express.
 --
--- STATUS: diagnostic-first. Hook targets still need ON-BOX confirmation, but this build LOGS what it
--- sees each launch (mod-load banner, FindAllOf probe, per-hit "activate:" lines) so a single run tells
--- us whether the K2_ActivateAbility hook is the right seam or we must pivot (montage hook / loose tag).
--- Tools on-box: ConsoleCommandsMod `dump_object`/`set`, `FindAllOf`. Idioms: FWStealth, TFWQuestHUDToggle.
+-- STATUS: hooks PROVEN on-box (v0.1.1: the BP-path K2_ActivateAbility fires and cancelling kills the
+-- stagger; v0.1.4: the ReceiveAnyDamage capture fires). The damage-type CLASS arrives ERASED there —
+-- 40/40 live hits were base-class CDOs — so per-type family resolves from the DamageCAUSER actor
+-- (weapon actor / AI pawn) as of v0.1.5. Still missing: one live hit that actually fires the
+-- hit-react WITH the capture on, to correlate the two seams (and prove damage-line-before-activation
+-- ordering). Tools on-box: ConsoleCommandsMod `dump_object`/`set`, `FindAllOf`.
 
 local cfg = require("config")
 
@@ -36,6 +38,27 @@ local function classify_damage(type_name)
     return "other"
 end
 
+-- v0.1.5: classify by the DamageCauser actor instead — the damage-type class never survives to
+-- ReceiveAnyDamage (two live rounds: every hit was a base-class CDO), but the causer names itself:
+-- weapon actors are BP_WPN_<code> and melee arrives with the attacking PAWN (BP_AI_*) as causer.
+-- Ordered needles (config array) so WPN_GRL lands "explosive" before the weapon→ballistic fallback.
+local function classify_causer(causer_class)
+    if not causer_class then return "other" end
+    for _, entry in ipairs(cfg.causer_classes) do
+        for _, needle in ipairs(entry.needles) do
+            if string.find(causer_class, needle, 1, true) then return entry.family end
+        end
+    end
+    if cfg.causer_weapon_prefix and string.find(causer_class, cfg.causer_weapon_prefix, 1, true) == 1 then
+        return "ballistic"   -- an unmatched weapon actor is still a gun until a log line proves otherwise
+    end
+    return "other"
+end
+
+-- Set on each incoming hit by the ReceiveAnyDamage capture; read back by the hit-react hook and by
+-- selective mode. Declared here (above should_block) so both close over the same local.
+local last_damage = { name = nil, family = "unknown" }
+
 -- Does the player's ASC own a gameplay tag (exact match)?  >>> CONFIRM ON-BOX: HasMatchingGameplayTag
 -- is a UAbilitySystemComponent UFunction taking an FGameplayTag; building the tag struct from Lua may
 -- need RequestGameplayTag. If tag reads are awkward, gate Part 2 on the pak capstone instead.
@@ -59,20 +82,9 @@ local function graded_chance(asc)
     return chance
 end
 
--- Read the incoming damage-type class from the hit-react ability's triggering event payload.
--- >>> CONFIRM ON-BOX: whether CurrentEventData (FGameplayEventData) carries the DamageType — check
--- .OptionalObject / .OptionalObject2 / .Instigator, or read the ASC's last damage context. This is
--- the open question that decides whether per-type selectivity is possible (see docs/design-notes.md #2).
-local function incoming_damage_type_name(ability)
-    local ok, name = pcall(function()
-        local ev = ability.CurrentEventData
-        if ev and ev.OptionalObject and ev.OptionalObject:IsValid() then
-            return ev.OptionalObject:GetClass():GetFName():ToString()
-        end
-        return nil
-    end)
-    return ok and name or nil
-end
+-- (v0.1.5: the CurrentEventData payload reader is GONE — v0.1.2 proved the payload carries only the
+-- generic trigger tag, and v0.1.4 proved the UDamageType arrives type-erased even upstream. The
+-- family now comes exclusively from the ReceiveAnyDamage capture below; see docs/design-notes.md #2.)
 
 -- ---------------------------------------------------------------------------
 -- decision
@@ -83,12 +95,12 @@ local function should_block(ability)
     if cfg.mode == "off" then return false end
     if cfg.mode == "blanket" then return true end
 
-    -- mode == "selective"
+    -- mode == "selective" — the family was captured upstream in ReceiveAnyDamage microseconds ago
+    -- (the ability itself carries no type: v0.1.2; the UDamageType arrives type-erased: v0.1.4).
     local asc = nil
-    local ok = pcall(function() asc = ability:GetAbilitySystemComponentFromActorInfo() end)  -- >>> CONFIRM
-    local dmg_name = incoming_damage_type_name(ability)
-    local family = classify_damage(dmg_name)
-    log(("hit: type=%s family=%s"):format(tostring(dmg_name), family))
+    pcall(function() asc = ability:GetAbilitySystemComponentFromActorInfo() end)  -- >>> CONFIRM ON-BOX
+    local family = last_damage.family or "other"
+    log(("hit: causer=%s family=%s"):format(tostring(last_damage.name), family))
 
     -- Part 1: config list always ignores these families.
     if cfg.ignore_types[family] then
@@ -147,16 +159,13 @@ end
 -- hook ReceiveAnyDamage, stash the type, and read it back in the hit-react hook microseconds later.
 -- Params verbatim from the dump: (Damage, DamageType, InstigatedBy, DamageCauser).
 --
--- v0.1.4: fenix's first v0.1.3 round came back 9/9 `type=FWDamageType` — the native BASE class, never a
--- BP_*Damage_FW subclass — and the hit-react never activated during that burst (cadence looked like
--- autofire/DoT, not a grenade). Either those hits genuinely ship the base type, or the class is erased
--- at this seam. Widen the capture to decide: damage amount, the type object's full name (CDO vs live
--- instance) + its super class (the native FWKnockDownDamageType-vs-FWGameDamageType split may be the
--- real signal), and the DamageCauser actor class+name (grenade/projectile/enemy — a usable per-type
--- signal even if the damage class stays erased). Classification still keys off the type class alone;
--- causer is LOG-ONLY until real names come back. Decision logic untouched (blanket still suppresses).
+-- v0.1.4 asked "is the type real here?" and fenix's named round ANSWERED IT: no. 40/40 hits arrived
+-- as base-class CDOs (SMG fire = Default__FWDamageType; Crawler melee AND a lethal grenade = engine
+-- Default__DamageType). The BP_*Damage_FW classes never reach this seam. But the CAUSER names itself
+-- perfectly: BP_WPN_SMG06AI_C (gunfire), BP_WPN_GRL00_C (grenade launcher), BP_AI_Eurasia_Crawler_C
+-- (melee = the attacking pawn). So v0.1.5 makes causer classification LIVE: type-class needles get
+-- first shot (harmless, they'll likely never match), then the causer decides the family.
 local DAMAGE_HOOK    = "/Game/FW/Player/BP_PlayerBase.BP_PlayerBase_C:ReceiveAnyDamage"
-local last_damage    = { name = nil, family = "unknown" }   -- set on each incoming hit, read by the hit-react hook
 local damage_hook_ok = false
 
 local function on_receive_any_damage(self, Damage, DamageType, InstigatedBy, DamageCauser)
@@ -185,14 +194,16 @@ local function on_receive_any_damage(self, Damage, DamageType, InstigatedBy, Dam
     end)
 
     if not (type_name or causer_class) then return end
-    local family = classify_damage(type_name)
-    if type_name then
-        last_damage.name   = type_name
-        last_damage.family = family
+    local family, via = classify_damage(type_name), "type"
+    if family == "other" then
+        family = classify_causer(causer_class)
+        via = (family ~= "other") and "causer" or "none"
     end
-    log(("damage: amt=%s type=%s super=%s full=%s causer=%s (%s) family=%s"):format(
+    last_damage.name   = causer_class or type_name
+    last_damage.family = family
+    log(("damage: amt=%s type=%s super=%s full=%s causer=%s (%s) family=%s via=%s"):format(
         tostring(amount), tostring(type_name), tostring(type_super), tostring(type_full),
-        tostring(causer_class), tostring(causer_name), family))
+        tostring(causer_class), tostring(causer_name), family, via))
 end
 
 local function install_damage_hook()
@@ -279,6 +290,6 @@ if not ok then log("WARNING: could not register ClientRestart hook") end
 install_hooks()
 install_damage_hook()
 
-log("loaded v0.1.4 (wide damage capture). mode=" .. cfg.mode
-    .. " — blanket still suppresses; per-hit log now carries amt/type/super/full/causer"
-    .. " (v0.1.3 live round: 9/9 hits were base FWDamageType and the hit-react never fired)")
+log("loaded v0.1.5 (causer classification). mode=" .. cfg.mode
+    .. " — blanket still suppresses; family now resolves from the DamageCauser (weapon actor / AI pawn)"
+    .. " since the damage-type class arrives erased. Hunting: one hit that actually fires the hit-react.")

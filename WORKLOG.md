@@ -1,5 +1,33 @@
 # WORKLOG
 
+## 2026-07-26 (later) — v0.1.4 named round: type ERASED everywhere; the CAUSER is the signal; hit-react still silent
+
+Textbook tester round (fenix: "old rifle fire / melee / die to grenade", in order, all three named in-log):
+
+- **SMG fire** 15:11: 33 × `amt=30`, type=`Default__FWDamageType`, **causer=`BP_WPN_SMG06AI_C`** (2–3 shooters).
+- **Crawler melee** 15:12: 6 × `amt=133`, type=engine `Default__DamageType`, **causer=`BP_AI_Eurasia_Crawler_C`**
+  — for melee the attacking PAWN is the causer.
+- **Grenade-launcher death** 15:13: 1 × `amt=1685`, type=engine `Default__DamageType`, **causer=`BP_WPN_GRL00_C`**.
+
+Verdicts:
+
+- **The damage-type class is dead as a signal — permanently.** 40/40 live hits (both rounds) arrived as
+  base-class CDOs; the `BP_*Damage_FW` subclasses never reach `ReceiveAnyDamage`. Design-notes open
+  question #2 is CLOSED: not in the event payload (v0.1.2), not in the `UDamageType` (v0.1.4).
+- **The CAUSER is a clean, complete replacement**: weapon actors name themselves (`WPN_SMG06AI`,
+  `WPN_GRL00`), melee is detectable as causer=`BP_AI_*` pawn. Per-type control pivots to causer names.
+- **Hit-react: still ZERO activations** across 40 hits — Crawler melee and a lethal grenade never even
+  tried to stagger. Stagger triggers are rarer than assumed (v0.1.1's staggering melee was a different
+  enemy type). Still needed: one POSITIVE correlation case — a hit that fires the hit-react while the
+  capture names it — which also proves the assumed damage-line-before-activation ordering.
+
+**v0.1.5:** causer-based family classification is LIVE (ordered needle tables in config; unmatched
+`BP_WPN_*` defaults to ballistic; feeds `last_damage.family` + the dry-run line). Selective mode now
+reads the upstream capture; the dead `CurrentEventData` payload reader is removed. Blanket unchanged
+and still the shipped default. Next round ask: hunt the BIG stuff — exo/heavy melee, tank/turret fire,
+survivable near-miss explosions — and report anything that VISIBLY staggers (a visible stagger with no
+`SUPPRESS` line = a second, un-hooked stagger path).
+
 ## 2026-07-26 — v0.1.3 live round: capture seam WORKS, but the type arrives ERASED; no control case
 
 First tester log with the ReceiveAnyDamage capture (fenix, one hub → Tunnel2 → hub cycle):

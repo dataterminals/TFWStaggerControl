@@ -51,6 +51,12 @@ carry **no `DamageTypeClass` field** to repoint. So *whether a given hit stagger
 The only static-pak lever is **blanket** (grant the block tag unconditionally). Genuine per-type control
 requires reading the incoming damage type at runtime → **UE4SS Lua**.
 
+> **Runtime reality (2026-07-26, live captures):** the table above is what ships in data, but the classic
+> damage path never carries those subclasses in practice — `ReceiveAnyDamage` received base-class CDOs for
+> every live hit (40/40: SMG fire = `Default__FWDamageType`; melee and a grenade-launcher kill = engine
+> `Default__DamageType`). The workable per-type signal is the **`DamageCauser` actor class**: weapon actors
+> name themselves (`BP_WPN_SMG06AI_C`, `BP_WPN_GRL00_C`) and melee passes the attacking pawn (`BP_AI_*`).
+
 The skill tree, by contrast, is **100% data** — see below.
 
 ## Architecture: one repo, two deliverables
@@ -112,8 +118,13 @@ This is statically airtight but **not yet game-verified.** Before shipping, conf
 
 1. **The linchpin:** owning `Ability.HitReactionBlocked` actually stops stagger in a live match. (Cheapest
    test: the UE4SS layer in `blanket` mode — see [`../WORKLOG.md`](../WORKLOG.md).)
-2. **Lua can read the incoming damage type** from the `Event.HitReaction.Player.Weapon` payload / effect
-   context at activation time (the hinge for per-type selectivity).
+2. **ANSWERED (2026-07-26): Lua canNOT read the incoming damage type — anywhere.** The event payload
+   carries only the trigger tag (v0.1.2), and even upstream at `ReceiveAnyDamage` the `UDamageType` is
+   type-erased to base-class CDOs (v0.1.4, 40/40 named hits). Per-type selectivity instead reads the
+   **`DamageCauser` actor** captured in the `ReceiveAnyDamage` hook: weapon actors name themselves
+   (`BP_WPN_SMG06AI_C` = gunfire, `BP_WPN_GRL00_C` = grenade launcher) and melee passes the attacking
+   pawn (`BP_AI_*`). Remaining sub-question: confirm the damage capture lands **before** the hit-react
+   activation on a hit that actually staggers (ordering is assumed, not yet observed on one hit).
 3. **A brand-new `PlayerSkill.Global.StaggerResist.*` tag** added only to `DT_PlayerSkillTags` resolves for
    unlock/save — or whether native `DefaultGameplayTags.ini` registration is also needed (fallback: reuse a
    spare shipped tag).

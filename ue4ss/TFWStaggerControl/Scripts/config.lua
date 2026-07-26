@@ -31,7 +31,8 @@ return {
     },
 
     -- Map each damage-type family to the Blueprint class-name substrings that identify it.
-    -- (Damage type is decided by CLASS, not a flag — see docs/findings.md.)
+    -- (Kept for completeness: two live rounds showed the damage type always arrives as a base-class
+    -- CDO at ReceiveAnyDamage, so in practice the CAUSER tables below decide the family.)
     type_classes = {
         explosive = { "ExplosiveDamage", "GrenadeLauncher" },
         heavy     = { "TankMainGunDamage", "TurretProjectileDamage" },
@@ -39,6 +40,20 @@ return {
         ballistic = { "ProjectileDamage", "ShotgunDamage" },
         fall      = { "FallDamage" },
     },
+
+    -- v0.1.5 — the LIVE per-type signal. The DamageCauser actor names itself: gunfire/launchers pass
+    -- the weapon actor (BP_WPN_<code>), melee passes the attacking pawn (BP_AI_*). Checked IN ORDER
+    -- (array), so WPN_GRL lands "explosive" before the generic weapon→ballistic fallback below.
+    -- Confirmed needles from fenix's logs: WPN_SMG (gunfire), WPN_GRL (grenade launcher), BP_AI_
+    -- (Crawler melee). The rest are educated guesses — every damage: log line teaches real names.
+    causer_classes = {
+        { family = "explosive", needles = { "WPN_GRL", "Grenade", "RPG", "Rocket", "Explos", "Barrel", "Mortar", "Mine" } },
+        { family = "heavy",     needles = { "Tank", "Turret", "Cannon", "Artil" } },
+        { family = "melee",     needles = { "BP_AI_" } },   -- the pawn itself as causer = a melee hit
+        { family = "ballistic", needles = { "WPN_SMG", "WPN_AR", "WPN_RIF", "WPN_MG", "WPN_LMG", "WPN_HMG",
+                                            "WPN_SNP", "WPN_SHG", "Shotgun", "Sniper", "Rifle", "Pistol" } },
+    },
+    causer_weapon_prefix = "BP_WPN_",   -- any unmatched weapon actor defaults to ballistic
 
     debug = true,   -- print decisions to the UE4SS console while dialing this in
 }
