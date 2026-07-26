@@ -2,10 +2,13 @@
 -- Edit these values, then relaunch the game (or re-run the mod). Human-editable on purpose.
 
 return {
-    -- Master switch. "off" = do nothing. "blanket" = ignore ALL stagger (the pak-only equivalent,
-    -- and the cheapest way to smoke-test the core seam). "selective" = honor the per-type list +
-    -- skill tags below. Start on "blanket" to prove the hook works, then move to "selective".
-    mode = "blanket",   -- "off" | "blanket" | "selective"
+    -- Master switch. "off" = do nothing. "blanket" = suppress ALL combat stagger (the proven-simple
+    -- path: 7/7 live activations cancelled). "selective" = per-family control: each stagger is
+    -- classified by what caused it and suppressed iff its family is ticked below (v0.1.6 defers the
+    -- cancel to the damage line that lands ~0.5 ms after activation). With the default list below,
+    -- selective should FEEL identical to blanket — plain gunfire never staggers anyway — while
+    -- exercising the per-type machinery end to end.
+    mode = "selective",   -- "off" | "blanket" | "selective"
 
     -- PART 1 — damage-type families to always ignore stagger from (used when mode == "selective").
     -- These are honored regardless of skill tree. Set true to make that family never stagger you.
@@ -31,8 +34,10 @@ return {
     },
 
     -- Map each damage-type family to the Blueprint class-name substrings that identify it.
-    -- (Kept for completeness: two live rounds showed the damage type always arrives as a base-class
-    -- CDO at ReceiveAnyDamage, so in practice the CAUSER tables below decide the family.)
+    -- The type DOES arrive real for some sources — CONFIRMED live: BP_ExplosiveDamage_FW_knockback
+    -- (with causer=nil, so this table is what catches explosions), BP_ShotgunDamage_FW,
+    -- BP_FallDamage. Rapid-fire guns and melee arrive as base-class CDOs and fall to the CAUSER
+    -- tables below. Type gets first shot, causer decides the rest.
     type_classes = {
         explosive = { "ExplosiveDamage", "GrenadeLauncher" },
         heavy     = { "TankMainGunDamage", "TurretProjectileDamage" },
@@ -41,17 +46,22 @@ return {
         fall      = { "FallDamage" },
     },
 
-    -- v0.1.5 — the LIVE per-type signal. The DamageCauser actor names itself: gunfire/launchers pass
-    -- the weapon actor (BP_WPN_<code>), melee passes the attacking pawn (BP_AI_*). Checked IN ORDER
-    -- (array), so WPN_GRL lands "explosive" before the generic weapon→ballistic fallback below.
-    -- Confirmed needles from fenix's logs: WPN_SMG (gunfire), WPN_GRL (grenade launcher), BP_AI_
-    -- (Crawler melee). The rest are educated guesses — every damage: log line teaches real names.
+    -- The CAUSER signal (checked when the type arrives erased). The DamageCauser actor names itself:
+    -- gunfire/launchers pass the weapon actor (BP_WPN_<code>), melee passes the attacking pawn
+    -- (BP_AI_*). Checked IN ORDER (array), so WPN_GRL lands "explosive" and Mech weapons land
+    -- "heavy" before the generic weapon→ballistic fallback below.
+    -- CONFIRMED from fenix's logs — ballistic: WPN_SMG05AI/SMG06AI, WPN_LMG03_AI, WPN_AI_HRF01a,
+    -- WPN_AI_RFL01_LowTech, WPN_SHG05_AI, WPN_Exo_LeftStubbyGun (prefix fallback),
+    -- WPN_Europa_Merkava_Machinegun, WPN_Drone; explosive: WPN_GRL00; heavy: WPN_20mmTurret,
+    -- WPN_MediumMech_MiniGun_Rear + WPN_MediumMech_LongRifle (via "Mech" — both carry the native
+    -- knockdown type); melee: BP_AI_Eurasia_Crawler. Explosions arrive causer=nil but with the REAL
+    -- type class, so the type table above catches them. The rest are educated guesses.
     causer_classes = {
         { family = "explosive", needles = { "WPN_GRL", "Grenade", "RPG", "Rocket", "Explos", "Barrel", "Mortar", "Mine" } },
-        { family = "heavy",     needles = { "Tank", "Turret", "Cannon", "Artil" } },
+        { family = "heavy",     needles = { "Tank", "Turret", "Cannon", "Artil", "Mech" } },
         { family = "melee",     needles = { "BP_AI_" } },   -- the pawn itself as causer = a melee hit
         { family = "ballistic", needles = { "WPN_SMG", "WPN_AR", "WPN_RIF", "WPN_MG", "WPN_LMG", "WPN_HMG",
-                                            "WPN_SNP", "WPN_SHG", "Shotgun", "Sniper", "Rifle", "Pistol" } },
+                                            "WPN_SNP", "WPN_SHG", "Shotgun", "Sniper", "Rifle", "Pistol", "Drone" } },
     },
     causer_weapon_prefix = "BP_WPN_",   -- any unmatched weapon actor defaults to ballistic
 

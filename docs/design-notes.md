@@ -51,11 +51,22 @@ carry **no `DamageTypeClass` field** to repoint. So *whether a given hit stagger
 The only static-pak lever is **blanket** (grant the block tag unconditionally). Genuine per-type control
 requires reading the incoming damage type at runtime → **UE4SS Lua**.
 
-> **Runtime reality (2026-07-26, live captures):** the table above is what ships in data, but the classic
-> damage path never carries those subclasses in practice — `ReceiveAnyDamage` received base-class CDOs for
-> every live hit (40/40: SMG fire = `Default__FWDamageType`; melee and a grenade-launcher kill = engine
-> `Default__DamageType`). The workable per-type signal is the **`DamageCauser` actor class**: weapon actors
-> name themselves (`BP_WPN_SMG06AI_C`, `BP_WPN_GRL00_C`) and melee passes the attacking pawn (`BP_AI_*`).
+> **Runtime reality (2026-07-26, two live rounds):** the type arrives REAL for some sources and ERASED for
+> others. Knockdown-class hits deliver the real class at `ReceiveAnyDamage` (`BP_ExplosiveDamage_FW_knockback_C`
+> **with `causer=nil`**, native `FWKnockDownDamageType` on mech weapons), and shotgun/fall deliver
+> `BP_ShotgunDamage_FW_C`/`BP_FallDamage_C`. Rapid-fire guns and melee arrive as base-class CDOs — for those
+> the **`DamageCauser` actor class** names the hit (`BP_WPN_SMG06AI_C`, `BP_WPN_Exo_LeftStubbyGun_C`; melee
+> passes the attacking pawn `BP_AI_*`). Classification = type first, else causer; both confirmed correct on
+> every live hit.
+>
+> **Live trigger model:** `GA_Player_HitReaction` fires **only on `FWKnockDownDamageType`-lineage hits** —
+> 7/7 observed activations were explosive knockback (×5) and the medium mech's rear minigun (×2, 300/hit);
+> 100+ plain gun hits fired it zero times (and not every knockdown hit re-fires it — internal gating while
+> active/ragdolled). **Ordering:** activation logs ~0.5 ms *before* the hit's own `ReceiveAnyDamage` line
+> (7/7), so selective mode must defer its cancel to the damage hook (v0.1.6). **Separate paths this seam
+> does NOT control:** the physics launch/ragdoll ("fly away" on big knockback hits — confirmed live: the GA
+> cancel suppresses the flinch but not the launch) and fall damage. Suppression itself is proven: all 7
+> activations cancelled, tester felt zero staggers.
 
 The skill tree, by contrast, is **100% data** — see below.
 
@@ -118,13 +129,14 @@ This is statically airtight but **not yet game-verified.** Before shipping, conf
 
 1. **The linchpin:** owning `Ability.HitReactionBlocked` actually stops stagger in a live match. (Cheapest
    test: the UE4SS layer in `blanket` mode — see [`../WORKLOG.md`](../WORKLOG.md).)
-2. **ANSWERED (2026-07-26): Lua canNOT read the incoming damage type — anywhere.** The event payload
-   carries only the trigger tag (v0.1.2), and even upstream at `ReceiveAnyDamage` the `UDamageType` is
-   type-erased to base-class CDOs (v0.1.4, 40/40 named hits). Per-type selectivity instead reads the
-   **`DamageCauser` actor** captured in the `ReceiveAnyDamage` hook: weapon actors name themselves
-   (`BP_WPN_SMG06AI_C` = gunfire, `BP_WPN_GRL00_C` = grenade launcher) and melee passes the attacking
-   pawn (`BP_AI_*`). Remaining sub-question: confirm the damage capture lands **before** the hit-react
-   activation on a hit that actually staggers (ordering is assumed, not yet observed on one hit).
+2. **ANSWERED (2026-07-26, refined same day): per-type IS readable — via type when real, else causer.**
+   The event payload carries only the trigger tag (v0.1.2). At `ReceiveAnyDamage`, rapid-fire guns and
+   melee arrive type-erased (base CDOs) but knockdown/shotgun/fall hits deliver the REAL class — and the
+   **`DamageCauser` actor** covers the erased cases (`BP_WPN_SMG06AI_C` = gunfire; `BP_AI_*` pawn =
+   melee; explosions arrive `causer=nil` but with the real type class). The ordering sub-question is
+   answered the OTHER way: activation fires ~0.5 ms **before** the hit's own damage line (7/7), so
+   selective mode defers its cancel to the damage hook (v0.1.6 pending-cancel; same frame, no visible
+   flinch expected — deferred path awaiting live confirmation).
 3. **A brand-new `PlayerSkill.Global.StaggerResist.*` tag** added only to `DT_PlayerSkillTags` resolves for
    unlock/save — or whether native `DefaultGameplayTags.ini` registration is also needed (fallback: reuse a
    spare shipped tag).

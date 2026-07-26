@@ -1,5 +1,48 @@
 # WORKLOG
 
+## 2026-07-26 (night) — ✅✅ SUPPRESSION PROVEN IN LIVE FIRE 7/7; trigger model + ordering nailed; v0.1.6 defers selective
+
+Three v0.1.5 logs from fenix (two Ashen Mesa sessions: guns/exo/mechs, then mech + drones). Headlines:
+
+- **The design works, end to end.** `GA_Player_HitReaction` activated **7 times** — explosive knockback
+  ×5, medium-mech rear minigun ×2 (`amt=300`, native `FWKnockDownDamageType`) — and **all 7 were
+  cancelled**. Fenix reports zero staggers. The one seam + cancel = the whole Part-1 mechanism, proven.
+- **Trigger model:** the GA fires ONLY on `FWKnockDownDamageType`-lineage hits. 100+ plain gun hits
+  (SMG05/06, LMG03, exo stubby gun, Merkava MG, drones, rifles, shotgun) → zero activations. Not every
+  knockdown hit re-fires it (internal gating while active/ragdolled — several knockbacks logged with no
+  activation). Crawler melee doesn't trigger it; v0.1.1's staggering melee source remains unidentified.
+- **The type is only PARTIALLY erased (corrects the v0.1.4 verdict):** knockback explosions arrive with
+  the REAL `BP_ExplosiveDamage_FW_knockback_C` and **`causer=nil`** (via=type saved them); shotgun =
+  `BP_ShotgunDamage_FW_C`; fall = `BP_FallDamage_C`; mech knockdown weapons = native
+  `FWKnockDownDamageType` with a causer. Rapid-fire guns stay erased → causer decides. The v0.1.5
+  type-first-else-causer classifier called every live hit correctly (turret → heavy ✓).
+- **ORDERING (the selective off-by-one):** all 7 activations logged ~0.5 ms BEFORE the triggering hit's
+  own `ReceiveAnyDamage` line — the GameplayEvent is sent from inside damage processing, before the
+  AnyDamage broadcast. So `last_damage` at activation time is the PREVIOUS hit (log shows e.g.
+  `would_block=false` from a stale rifle when the trigger was explosive). Deciding at activation is
+  wrong by one hit.
+- **The "fly away" is a separate path.** Big knockback hits physics-launch the player (fenix: "big meha
+  make scavgirl fly… almost die to falldamage" — launch → `BP_FallDamage` 856 in-log). Cancelling the GA
+  kills the flinch, not the launch. Community corroboration (MxPmH1517): mech hits "skip the stagger
+  frame and directly make you fall." Candidate future feature; out of the hit-react seam's reach.
+- New confirmed causer names fed into config: SMG05AI, LMG03_AI, AI_HRF01a, AI_RFL01_LowTech, SHG05_AI,
+  Exo_LeftStubbyGun (prefix-fallback ✓), Europa_Merkava_Machinegun, 20mmTurret (heavy ✓),
+  MediumMech_MiniGun_Rear, MediumMech_LongRifle (4482-dmg killshot, no GA — death path), Drone.
+
+**v0.1.6 — the deferred-selective build:**
+- Selective mode now PARKS the activated ability (`pending`) and decides in the damage hook that fires
+  sub-ms later with the real classification; blanket still cancels on the spot. Pending cleared on
+  ClientRestart, 100 ms expiry window, `allow`/`SUPPRESS (deferred N ms)` logged either way.
+- `should_block` replaced by `family_blocks(family, ability)` (config families live; skill-tag checks
+  still stubbed). Dead `CurrentEventData` reader stayed gone; `hit-react:` line renamed to
+  `prev_damage=`/`prev_family=` so nobody mistakes it for the trigger's own hit.
+- Config: `mode="selective"` is the SHIPPED TEST DEFAULT (explosive/heavy/melee ticked, ballistic off —
+  should feel identical to blanket since plain gunfire never staggers); heavy needles += "Mech";
+  confirmed-name comments refreshed.
+- **Next round asks:** does selective feel identical (no staggers except falls/fly-away)? Any visible
+  flinch = the deferred cancel landed too late or a family misread — the `allow`/`deferred` log lines
+  will say which. That's the one risk this build carries.
+
 ## 2026-07-26 (later) — v0.1.4 named round: type ERASED everywhere; the CAUSER is the signal; hit-react still silent
 
 Textbook tester round (fenix: "old rifle fire / melee / die to grenade", in order, all three named in-log):

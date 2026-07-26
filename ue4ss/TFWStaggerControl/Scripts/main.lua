@@ -4,12 +4,14 @@
 -- (Part 1) and (2) owned resistance skill tags (Part 2 graded/per-type). The static pak works without
 -- this file; this file adds per-type selectivity and graded % that pure data can't express.
 --
--- STATUS: hooks PROVEN on-box (v0.1.1: the BP-path K2_ActivateAbility fires and cancelling kills the
--- stagger; v0.1.4: the ReceiveAnyDamage capture fires). The damage-type CLASS arrives ERASED there —
--- 40/40 live hits were base-class CDOs — so per-type family resolves from the DamageCAUSER actor
--- (weapon actor / AI pawn) as of v0.1.5. Still missing: one live hit that actually fires the
--- hit-react WITH the capture on, to correlate the two seams (and prove damage-line-before-activation
--- ordering). Tools on-box: ConsoleCommandsMod `dump_object`/`set`, `FindAllOf`.
+-- STATUS: suppression PROVEN in live fire — 7/7 hit-react activations cancelled (explosive knockback
+-- ×5, medium-mech rear minigun ×2), tester felt zero staggers. Trigger model: the GA fires ONLY on
+-- FWKnockDownDamageType-lineage hits; 100+ plain gun hits fired it zero times. Types arrive REAL for
+-- knockdown/shotgun/fall hits and ERASED (base CDOs) for rapid-fire guns — classification uses type
+-- first, else the DamageCauser actor. Ordering (7/7): activation precedes the hit's own
+-- ReceiveAnyDamage by ~0.5 ms, so selective mode defers its cancel to the damage hook (v0.1.6).
+-- KNOWN SEPARATE PATHS (not this ability, not suppressed): the physics launch/ragdoll ("fly away")
+-- and fall damage. Tools on-box: ConsoleCommandsMod `dump_object`/`set`, `FindAllOf`.
 
 local cfg = require("config")
 
@@ -56,7 +58,7 @@ local function classify_causer(causer_class)
 end
 
 -- Set on each incoming hit by the ReceiveAnyDamage capture; read back by the hit-react hook and by
--- selective mode. Declared here (above should_block) so both close over the same local.
+-- selective mode. Declared here (above the decision section) so all readers close over one local.
 local last_damage = { name = nil, family = "unknown" }
 
 -- Does the player's ASC own a gameplay tag (exact match)?  >>> CONFIRM ON-BOX: HasMatchingGameplayTag
@@ -90,43 +92,43 @@ end
 -- decision
 -- ---------------------------------------------------------------------------
 
--- Return true to SUPPRESS the stagger for this activation.
-local function should_block(ability)
-    if cfg.mode == "off" then return false end
-    if cfg.mode == "blanket" then return true end
-
-    -- mode == "selective" — the family was captured upstream in ReceiveAnyDamage microseconds ago
-    -- (the ability itself carries no type: v0.1.2; the UDamageType arrives type-erased: v0.1.4).
+-- Return true (plus a reason) to SUPPRESS a hit-react whose triggering hit classified as `family`.
+-- Part 1 = the config family list. Part 2 (skill tags) reuses the same seam once tag reads are
+-- confirmed on-box (asc_has_tag is still a stub — it always returns false for now).
+local function family_blocks(family, ability)
+    if cfg.ignore_types[family] then return true, "config family " .. family end
     local asc = nil
-    pcall(function() asc = ability:GetAbilitySystemComponentFromActorInfo() end)  -- >>> CONFIRM ON-BOX
-    local family = last_damage.family or "other"
-    log(("hit: causer=%s family=%s"):format(tostring(last_damage.name), family))
-
-    -- Part 1: config list always ignores these families.
-    if cfg.ignore_types[family] then
-        log("blocked by config family " .. family); return true
-    end
-
-    -- Part 2: per-type immunity skill tags.
+    pcall(function() asc = ability and ability:GetAbilitySystemComponentFromActorInfo() end)  -- >>> CONFIRM ON-BOX
     local imm_tag = cfg.skill.type_immunity_tag ..
         (family:sub(1,1):upper() .. family:sub(2))   -- e.g. "...Type.Explosive"
-    if asc_has_tag(asc, imm_tag) then
-        log("blocked by skill immunity " .. imm_tag); return true
-    end
-
-    -- Part 2: graded % shrug-off.
+    if asc_has_tag(asc, imm_tag) then return true, "skill immunity " .. imm_tag end
     local chance = graded_chance(asc)
     if chance > 0 and math.random() < chance then
-        log(("blocked by graded roll (chance=%.2f)"):format(chance)); return true
+        return true, ("graded roll (chance=%.2f)"):format(chance)
     end
+    return false, nil
+end
 
-    return false
+-- v0.1.6 — the live rounds killed the "decide at activation" plan: 7/7 observed activations logged
+-- ~0.5 ms BEFORE the triggering hit's own ReceiveAnyDamage line (the GameplayEvent is sent from
+-- inside damage processing, before the AnyDamage broadcast reaches BP). At activation time
+-- last_damage still holds the PREVIOUS hit — deciding there is off-by-one. So selective mode parks
+-- the live ability here and the damage hook (same frame, sub-ms later) classifies the real hit and
+-- cancels. Same-frame cancel means the montage never renders a frame before it dies.
+local pending = { ability = nil, at = 0.0 }
+local PENDING_WINDOW_S = 0.10   -- the damage line lands <1 ms later; 100 ms is a generous ceiling
+
+local function cancel_ability(ability, why)
+    log("SUPPRESS hit-react — cancelling (" .. why .. ")")
+    local okc = pcall(function() ability:K2_CancelAbility() end)
+    if not okc then pcall(function() ability:K2_EndAbility() end) end   -- >>> CONFIRM: cancel vs end
 end
 
 -- ---------------------------------------------------------------------------
 -- hook + on-box diagnostics
 -- ---------------------------------------------------------------------------
--- Strategy: intercept the hit-react ability activation and cancel it when should_block() is true.
+-- Strategy: intercept the hit-react ability activation; blanket cancels on the spot, selective
+-- parks the ability and cancels from the damage hook once the triggering hit is classified.
 -- GA activation is often native; the reliable BP entry is K2_ActivateAbility ON THE GENERATED CLASS
 -- (a BlueprintImplementableEvent overridden in a BP is a *distinct* UFunction from the engine base),
 -- which is why we register both the base and the full BP path below.  >>> CONFIRM ON-BOX which fires.
@@ -159,12 +161,13 @@ end
 -- hook ReceiveAnyDamage, stash the type, and read it back in the hit-react hook microseconds later.
 -- Params verbatim from the dump: (Damage, DamageType, InstigatedBy, DamageCauser).
 --
--- v0.1.4 asked "is the type real here?" and fenix's named round ANSWERED IT: no. 40/40 hits arrived
--- as base-class CDOs (SMG fire = Default__FWDamageType; Crawler melee AND a lethal grenade = engine
--- Default__DamageType). The BP_*Damage_FW classes never reach this seam. But the CAUSER names itself
--- perfectly: BP_WPN_SMG06AI_C (gunfire), BP_WPN_GRL00_C (grenade launcher), BP_AI_Eurasia_Crawler_C
--- (melee = the attacking pawn). So v0.1.5 makes causer classification LIVE: type-class needles get
--- first shot (harmless, they'll likely never match), then the causer decides the family.
+-- v0.1.4 asked "is the type real here?" — answer (refined over two rounds): SOMETIMES. Rapid-fire
+-- guns and melee arrive type-erased (base CDOs) — for those the CAUSER names the hit
+-- (BP_WPN_SMG06AI_C, BP_WPN_Exo_LeftStubbyGun_C, BP_AI_Eurasia_Crawler_C = melee pawn). But
+-- knockdown-class hits DO deliver the real type (BP_ExplosiveDamage_FW_knockback_C with causer=nil,
+-- native FWKnockDownDamageType on mech weapons), and shotguns/fall deliver BP_ShotgunDamage_FW_C /
+-- BP_FallDamage_C. So classification gives the type first shot, then falls to the causer — both
+-- paths confirmed correct on every live hit so far.
 local DAMAGE_HOOK    = "/Game/FW/Player/BP_PlayerBase.BP_PlayerBase_C:ReceiveAnyDamage"
 local damage_hook_ok = false
 
@@ -204,6 +207,24 @@ local function on_receive_any_damage(self, Damage, DamageType, InstigatedBy, Dam
     log(("damage: amt=%s type=%s super=%s full=%s causer=%s (%s) family=%s via=%s"):format(
         tostring(amount), tostring(type_name), tostring(type_super), tostring(type_full),
         tostring(causer_class), tostring(causer_name), family, via))
+
+    -- v0.1.6: resolve a parked selective-mode hit-react — THIS damage line is the hit that triggered
+    -- it (activation precedes its own damage line by ~0.5 ms; see the decision section).
+    if pending.ability then
+        local age = os.clock() - pending.at
+        local a = pending.ability
+        pending.ability = nil
+        if age <= PENDING_WINDOW_S then
+            local block, why = family_blocks(family, a)
+            if block then
+                cancel_ability(a, ("%s, deferred %.1f ms"):format(why, age * 1000))
+            else
+                log(("allow hit-react — family=%s not blocked (deferred %.1f ms)"):format(family, age * 1000))
+            end
+        else
+            log(("pending hit-react expired unresolved (%.0f ms) — allowed"):format(age * 1000))
+        end
+    end
 end
 
 local function install_damage_hook()
@@ -229,17 +250,19 @@ local function install_hooks()
                     end
                     if cls ~= HITREACT_ABILITY_CLASS then return end
                     local ability = self:get()
-                    -- Part 1: report the family captured upstream + what SELECTIVE mode WOULD decide (dry
-                    -- run — blanket still suppresses everything below, so behavior is unchanged and safe).
-                    local fam = last_damage.family or "unknown"
-                    local sel_block = (fam ~= "unknown") and (cfg.ignore_types[fam] == true)
-                    log(("hit-react: last_damage=%s family=%s selective_would_block=%s")
-                        :format(tostring(last_damage.name), fam, tostring(sel_block)))
-                    if should_block(ability) then
-                        log("SUPPRESS hit-react — cancelling")
-                        local okc = pcall(function() ability:K2_CancelAbility() end)
-                        if not okc then pcall(function() ability:K2_EndAbility() end) end   -- >>> CONFIRM: cancel vs end
+                    -- NB: last_damage at this instant is the PREVIOUS hit — the trigger's own damage
+                    -- line lands ~0.5 ms from now (7/7 live activations). Logged for the record only.
+                    log(("hit-react: prev_damage=%s prev_family=%s mode=%s")
+                        :format(tostring(last_damage.name), tostring(last_damage.family), cfg.mode))
+                    if cfg.mode == "off" then return end
+                    if cfg.mode == "blanket" then
+                        cancel_ability(ability, "blanket")
+                        return
                     end
+                    -- selective: park it; the damage hook classifies the real hit and decides.
+                    pending.ability = ability
+                    pending.at = os.clock()
+                    log("hit-react pending — awaiting the damage line to classify")
                 end)
             end)
             hook_ok[target] = ok
@@ -281,6 +304,7 @@ end
 local ok = pcall(function()
     RegisterHook("/Script/Engine.PlayerController:ClientRestart", function()
         log("player restart; mode=" .. cfg.mode)
+        pending.ability = nil    -- v0.1.6: never carry a parked hit-react across a spawn
         install_hooks()          -- GA activation hooks (retry until the ability class is loaded)
         install_damage_hook()    -- ReceiveAnyDamage capture (retry until BP_PlayerBase is loaded)
         ExecuteWithDelay(1500, function() ExecuteInGameThread(probe) end)  -- defer: defs load lazily
@@ -290,6 +314,6 @@ if not ok then log("WARNING: could not register ClientRestart hook") end
 install_hooks()
 install_damage_hook()
 
-log("loaded v0.1.5 (causer classification). mode=" .. cfg.mode
-    .. " — blanket still suppresses; family now resolves from the DamageCauser (weapon actor / AI pawn)"
-    .. " since the damage-type class arrives erased. Hunting: one hit that actually fires the hit-react.")
+log("loaded v0.1.6 (deferred selective). mode=" .. cfg.mode
+    .. " — suppression PROVEN 7/7 live; selective now parks the activation and decides on the damage"
+    .. " line that lands ~0.5 ms later (activation-before-damage ordering, observed 7/7)")
