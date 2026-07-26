@@ -23,7 +23,7 @@ Each new `SkillTag` must also be appended as a row to `DT_PlayerSkillTags` (see 
 
 - `SkillTag` namespace: `PlayerSkill.Global.StaggerResist.*` (mirrors `PlayerSkill.Global.Stamina_01`).
 - `ValueOfXP`: follow the Stamina curve (2500 → 8125 → … → 43125) for a "deep investment" line, or a flat
-  2000/tier (weapon-expert style) for a cheaper line. **Deni sets the final costs + names + icons.**
+  2000/tier (weapon-expert style) for a cheaper line. **The author sets the final costs + names + icons.**
 - Graft target: each root's `ChildSkills` (all 6 — Gunhead's root omits the shared Global lines).
 
 > The clone-and-edit asset authoring (step 3 in `build.sh`) needs a small extension to `skillpatch`

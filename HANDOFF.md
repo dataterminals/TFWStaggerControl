@@ -1,7 +1,7 @@
 # HANDOFF — read me first
 
 *Bootstrap context for a fresh session opened with cwd = this repo. Self-contained on purpose: the
-per-project memory is keyed to the old cwd (`H:\Github Repositories`) and does **not** follow into this
+per-project memory is keyed to the old cwd (the parent repos folder) and does **not** follow into this
 subfolder, so nothing below assumes memory. Deeper detail is in [`docs/`](docs/) and [`WORKLOG.md`](WORKLOG.md).*
 
 ## What this is
@@ -48,7 +48,7 @@ Full evidence: [`docs/findings.md`](docs/findings.md). Architecture + rationale:
 | UE4SS layer (`ue4ss/TFWStaggerControl/Scripts/{main,config}.lua`) | ✅ first cut, `mode="blanket"`, **unverified** |
 | `tools/skillpatch/` (UAssetAPI grafter from ScavgirlCarryPerks) | ✅ copied; needs clone-and-edit + DataTable-append extension |
 | Pak build (`build.sh`) | ⚠️ steps 1–2 ready; asset-authoring (3–5) not built |
-| **Staged on MO2** | ✅ `H:\MO2Instance_ModData\ForeverWinter\mods\TFWStaggerControl\` (Root Builder mod) — **not yet enabled** (MO2 was open; `modlist.txt` untouched) |
+| **Staged on MO2** | ✅ `<MO2 instance>\mods\TFWStaggerControl\` (Root Builder mod) — **not yet enabled** (MO2 was open; `modlist.txt` untouched) |
 | **In-game verification** | ❌ **none — this is the blocker** |
 
 ## THE immediate next action — the 2-minute smoke test
@@ -61,7 +61,7 @@ Everything downstream assumes owning `Ability.HitReactionBlocked` actually stops
 3. Take an explosion / melee hit — **do you still stagger?**
 
 **Read the log** MO2 catches at:
-`H:\MO2Instance_ModData\ForeverWinter\overwrite\Root\Windows\ForeverWinter\Binaries\Win64\ue4ss\UE4SS.log`
+`<MO2 instance>\overwrite\Root\Windows\ForeverWinter\Binaries\Win64\ue4ss\UE4SS.log`
 - Look for `Mod 'TFWStaggerControl' has enabled.txt, starting mod`, then `[TFWStaggerControl] loaded. mode=blanket`
   and `hooked …` vs `FAILED to hook …`.
 
@@ -73,18 +73,18 @@ Everything downstream assumes owning `Ability.HitReactionBlocked` actually stops
   first try — see the `>>> CONFIRM ON-BOX` markers in `main.lua`). Fix via `dump_object` on a live
   `GA_Player_HitReaction_C` (ConsoleCommandsMod) to find the real activation function, then re-hook.
 
-## Where everything lives (absolute paths — sibling repos, not in this cwd)
+## Where everything lives (sibling repos & tools — paths relative to this repo's cwd)
 
-- **Decode any asset:** `cd "H:/Github Repositories/forever-winter-datamine" && python -m fwdata get <AssetName>`
+- **Decode any asset:** `cd ../forever-winter-datamine && python -m fwdata get <AssetName>`
   → JSON at `datamine/decoder/out/cache/24097213/dump/misc/<AssetName>.json`. Master asset list:
   `datamine/decoder/out/filelist.txt`. (Use specific names; a broad substring decodes hundreds.)
-- **Prior art:** `H:/Github Repositories/ScavgirlCarryPerks` (the `skillpatch` graft + `docs/design-notes.md`);
-  `H:/Github Repositories/FWBehaviorLab/docs/field-guide.md` (the two modding vectors);
-  `FWBehaviorLab/mods/FWStealth` (Lua-mod layout analog).
-- **Build toolchain:** `.NET` SDK 8 + 10; `retoc.exe` at `H:/Github Repositories/UnkillablesRebalanceFix/tools/retoc/retoc.exe`;
-  AES `0x84B2244BE0AF90C22976D739FA0665569219F4CEA119CEA37C81F2D9ABEE4795`;
-  usmap `H:/Github Repositories/forever-winter-datamine/datamine/mappings/ForeverWinter-5.4.2.usmap`.
-- **Game:** `H:\SteamLibrary\steamapps\common\The Forever Winter`. **MO2 instance data:** `H:\MO2Instance_ModData\ForeverWinter`.
+- **Prior art:** `../ScavgirlCarryPerks` (the `skillpatch` graft + `docs/design-notes.md`);
+  `../FWBehaviorLab/docs/field-guide.md` (the two modding vectors);
+  `../FWBehaviorLab/mods/FWStealth` (Lua-mod layout analog).
+- **Build toolchain:** `.NET` SDK 8 + 10; `retoc.exe` at `../UnkillablesRebalanceFix/tools/retoc/retoc.exe`;
+  the TFW AES key (a community-known constant — in the datamine README);
+  usmap `../forever-winter-datamine/datamine/mappings/ForeverWinter-5.4.2.usmap`.
+- **Game:** `<Steam library>\steamapps\common\The Forever Winter`. **MO2 instance data:** `<MO2 instance>`.
 
 ## Quick asset reference
 
@@ -101,7 +101,7 @@ Everything downstream assumes owning `Ability.HitReactionBlocked` actually stops
   `BP_TankMainGunDamage_FW`, `BP_TurretProjectileDamage_FW`; melee/knockdown `BP_MeleeDamage_FW`,
   `BP_DamageType_AssaultInfantry(_Knockdown)`; ballistic `BP_ProjectileDamage_FW`, `BP_ShotgunDamage_FW`.
 
-## Decisions still owned by Deni (don't invent these)
+## Decisions still owned by the author (don't invent these)
 
 Node **names / descriptions / icons**; the **cost curve** (deep Stamina-style vs flat); number of **%% tiers**;
 whether to also ship a pak **"blanket always-on"** toggle variant.

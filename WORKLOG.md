@@ -21,7 +21,7 @@ hit-react). Fall/hard-landing stagger is a separate path; out of scope unless we
 fields, so all 11 montage-name guesses false-positived (`GetFullName` failed on every one). v0.1.2 drops it;
 any future reflection read now validates `IsValid()` + a real `GetFullName()` first.
 
-**Next (Deni's pick): per-type selectivity.** v0.1.2 keeps blanket suppression but logs the triggering
+**Next (author's pick): per-type selectivity.** v0.1.2 keeps blanket suppression but logs the triggering
 payload (`CurrentEventData.*`, validated) on each caught hit, to test whether the damage family is reachable
 at hit-react time (design-notes open question #2). If it's not exposed there, we pivot to hooking the damage
 pipeline (where the `BP_*Damage_FW` type class is a parameter).
@@ -85,7 +85,7 @@ from ScavgirlCarryPerks, `build.sh` skeleton, `pak/` + `tools/` READMEs. `git in
 5. **Multiplayer check** — confirm client-side suppression affects only the local player and isn't
    host-corrected.
 
-### Decisions still owned by Deni
+### Decisions still owned by the author
 - Final node names / descriptions / icons (human-facing copy).
 - Cost curve (deep Stamina-style 2500→43125 vs flat 2000/tier) and number of %% tiers.
 - Whether to ship the pak's "blanket always-on" toggle variant in addition to the skill-gated capstone.

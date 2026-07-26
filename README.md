@@ -8,7 +8,7 @@ A two-part stagger mod for **The Forever Winter** (UE 5.4.2, build 24097213).
    immunity nodes, a graded shrug-off-chance line, and a full-immunity capstone.
 
 > **Working name / draft copy.** `TFWStaggerControl` is a placeholder repo name and this README is
-> engineering substance, not final public wording — Deni writes the Nexus-facing name, descriptions,
+> engineering substance, not final public wording — the author writes the Nexus-facing name, descriptions,
 > and node text.
 
 ## How it works (one sentence)
