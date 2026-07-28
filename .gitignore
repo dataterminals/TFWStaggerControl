@@ -17,8 +17,6 @@ tools/skillpatch/obj/
 tools/retoc/
 *.usmap
 
-# dist is built output; keep the folder, ignore heavy binaries until we choose to ship
-dist/**/*.ucas
-dist/**/*.utoc
-dist/**/*.pak
-dist/**/*.zip
+# dist releases are TRACKED — the shipped zips (and our own authored paks) travel with the
+# repo so a second dev machine gets them on `git pull`. Heavy build scratch never goes here:
+# it lives in pak/staging/ and work/ (ignored above). Only commit our own content to dist/.
