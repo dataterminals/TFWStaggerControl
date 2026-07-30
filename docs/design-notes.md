@@ -59,14 +59,22 @@ requires reading the incoming damage type at runtime → **UE4SS Lua**.
 > passes the attacking pawn `BP_AI_*`). Classification = type first, else causer; both confirmed correct on
 > every live hit.
 >
-> **Live trigger model:** `GA_Player_HitReaction` fires **only on `FWKnockDownDamageType`-lineage hits** —
-> 7/7 observed activations were explosive knockback (×5) and the medium mech's rear minigun (×2, 300/hit);
-> 100+ plain gun hits fired it zero times (and not every knockdown hit re-fires it — internal gating while
-> active/ragdolled). **Ordering:** activation logs ~0.5 ms *before* the hit's own `ReceiveAnyDamage` line
-> (7/7), so selective mode must defer its cancel to the damage hook (v0.1.6). **Separate paths this seam
-> does NOT control:** the physics launch/ragdoll ("fly away" on big knockback hits — confirmed live: the GA
-> cancel suppresses the flinch but not the launch) and fall damage. Suppression itself is proven: all 7
-> activations cancelled, tester felt zero staggers.
+> **Live trigger model:** most activations come from `FWKnockDownDamageType`-lineage hits — explosive
+> knockback and the medium mech's rear minigun (300/hit) account for 12 of the 14 observed — and 100+
+> plain gun hits fired it zero times. But **the lineage is not the rule**: a `BP_AI_Eurasia_Cyborg_C`
+> melee hit carrying engine-base `Default__DamageType` (`super=Object`, 250 dmg) fired it too. Not every
+> knockdown hit re-fires it either — there's internal gating while active/ragdolled.
+>
+> **Ordering is TWO-SIDED, and this is the subtle one.** The GameplayEvent is sent from inside damage
+> processing on every path, but *where* differs: explosive/knockdown hits send it **before** the
+> AnyDamage broadcast (activation logs ~0.3 ms early, 12/12), infantry melee sends it **after**
+> (activation logs 0.67 ms late, 1/1). Selective mode must therefore resolve from both directions —
+> look behind at the last damage line, then park for the next one (v0.1.7). v0.1.6 looked only forward
+> and leaked the melee case.
+>
+> **Separate paths this seam does NOT control:** the physics launch/ragdoll ("fly away" on big knockback
+> hits — confirmed live: the GA cancel suppresses the flinch but not the launch) and fall damage.
+> Suppression itself is proven: blanket cancelled 7/7, selective 6/7 then patched to 7/7 offline.
 
 The skill tree, by contrast, is **100% data** — see below.
 
@@ -125,23 +133,42 @@ which disables *all* stagger with no type selectivity.
 
 ## Open questions — must be settled with an in-game smoke test
 
-This is statically airtight but **not yet game-verified.** Before shipping, confirm:
+Part 1 is settled in live fire. Everything still open belongs to Part 2 (the pak):
 
-1. **The linchpin:** owning `Ability.HitReactionBlocked` actually stops stagger in a live match. (Cheapest
-   test: the UE4SS layer in `blanket` mode — see [`../WORKLOG.md`](../WORKLOG.md).)
-2. **ANSWERED (2026-07-26, refined same day): per-type IS readable — via type when real, else causer.**
+1. **PARTLY ANSWERED — and mind the gap.** *Suppressing the ability* stops stagger: proven, five tester
+   rounds, blanket 7/7. But that is the **cancel-on-activation** path, which is what UE4SS does. The pak
+   relies on a *different* mechanism — owning `Ability.HitReactionBlocked` so the shipping
+   `ActivationBlockedTags` gate stops the ability from activating at all. That gate is stock GAS
+   behaviour and the tag is right there in shipping data, so it should hold, **but nothing has tested
+   it.** It is the single load-bearing assumption left, and the first pak build is what proves it —
+   test it with UE4SS switched off, or the Lua layer will mask the result.
+2. **ANSWERED (2026-07-26, refined 2026-07-30): per-type IS readable — via type when real, else causer.**
    The event payload carries only the trigger tag (v0.1.2). At `ReceiveAnyDamage`, rapid-fire guns and
-   melee arrive type-erased (base CDOs) but knockdown/shotgun/fall hits deliver the REAL class — and the
-   **`DamageCauser` actor** covers the erased cases (`BP_WPN_SMG06AI_C` = gunfire; `BP_AI_*` pawn =
-   melee; explosions arrive `causer=nil` but with the real type class). The ordering sub-question is
-   answered the OTHER way: activation fires ~0.5 ms **before** the hit's own damage line (7/7), so
-   selective mode defers its cancel to the damage hook (v0.1.6 pending-cancel; same frame, no visible
-   flinch expected — deferred path awaiting live confirmation).
-3. **A brand-new `PlayerSkill.Global.StaggerResist.*` tag** added only to `DT_PlayerSkillTags` resolves for
-   unlock/save — or whether native `DefaultGameplayTags.ini` registration is also needed (fallback: reuse a
-   spare shipped tag).
+   infantry melee arrive type-erased (base CDOs) but knockdown/shotgun/fall/mech-melee hits deliver the
+   REAL class — and the **`DamageCauser` actor** covers the erased cases (`BP_WPN_SMG06AI_C` = gunfire;
+   `BP_AI_*` pawn = melee; explosions arrive `causer=nil` but with the real type class). The ordering
+   sub-question turned out to have **two** answers depending on the damage path — see the two-sided
+   ordering note above; v0.1.7 resolves from both directions.
+3. **ANSWERED (2026-07-30) — a DataTable row IS a real tag registration, but adding tags is not free.**
+   The cooked `ForeverWinter/Config/DefaultGameplayTags.ini` (extract with `fwdata get
+   DefaultGameplayTags --raw`) lists our table as a tag source:
+   `+GameplayTagTableList=/Game/FW/Player/Skills/DT_PlayerSkillTags.DT_PlayerSkillTags`, alongside 1008
+   inline `+GameplayTagList=` entries. So appending a row registers the tag. Two consequences:
+   - **`Ability.HitReactionBlocked` is already registered** (inline in that ini), so the capstone's GE
+     grants an existing tag and needs no new registration at all.
+   - ⚠️ **`FastReplication=True`** in the same block. With fast replication, replicated `FGameplayTag`s
+     serialize as an *index into the sorted global tag list*, so client and host must hold identical
+     lists. A pak that adds a tag the host doesn't have shifts every index after it — which risks
+     misread tags across the whole GAS layer, not just ours. **Prefer reusing an already-registered
+     spare tag** for the node's `SkillTag`: 270 rows exist against only 143 shipped `SD_Skill_*`
+     assets, so ~127 rows are unaccounted for and some should be free. Confirm a candidate is granted
+     by nothing before reusing it, and treat "add a brand-new tag" as the multiplayer-risky path.
+   Note this risk is **specific to the pak**. The UE4SS layer adds no tags — it cancels an ability
+   locally — so Part 1 carries none of it.
 4. **A node grafted onto a root** unlocks, persists in save, and its GE is applied on purchase (implied by
    ScavgirlCarryPerks' RIG04 graft, but that was mid-tree, not top-level-under-root).
 5. **Multiplayer:** TFW is host-authoritative over EOS P2P. Hit-react runs on the local player's pawn, so
    client-side suppression *probably* affects only the local player — confirm it isn't silently corrected
-   by the host, and that the skill-tag path behaves for a non-host.
+   by the host, and that the skill-tag path behaves for a non-host. **See the `FastReplication` note in
+   #3** — for the pak this is not just "does my skill work", it's "does adding a tag desync the shared
+   tag index". Test the pak in co-op against an unmodded host before recommending it for multiplayer.
