@@ -115,6 +115,37 @@ Two lines + a capstone:
 - **Full-immunity capstone** — its GE grants the real `Ability.HitReactionBlocked`, so **this node alone
   works with no UE4SS** (pure data). It's the graceful-degradation path for pak-only users.
 
+#### Tag budget — we borrow orphan tags rather than adding our own
+
+Because of `FastReplication` (open question #3), the tree **adds no gameplay tags**. Instead it reuses
+rows already registered in `DT_PlayerSkillTags` but backed by nothing — so the sorted global tag list
+is byte-identical to an unmodded install, and `DT_PlayerSkillTags` itself is never edited.
+
+How the candidates were found (2026-07-30, worth re-running after a game update):
+
+1. Decode all 143 shipped `SD_Skill_*` and collect their `SkillTag` — only **81 distinct tags** for 270
+   table rows. (`SkillTag` is *not* unique per asset: the four per-character copies of HRF Expert v1 all
+   carry `PlayerSkill.Global.HRFExpert.v1`. The tag names the *skill concept*, so our shared nodes need
+   one tag each, not one per root. Every shipped SD has one — the field is not optional.)
+2. That leaves **189 unclaimed rows**, all of them tags for planned-but-unshipped skills.
+3. Unclaimed is not the same as free — grep the pak filelist for each feature name. **`PlayerSkill.Prestige.*`
+   is the trap**: 100 rows, by far the most tempting block, but Prestige has ~65 assets in the pak
+   (audio, UI), so that system is partially built and its tags may go live. Same for HeadCannon,
+   PneumaticJump, DeployableTurret.
+
+**Chosen: `PlayerSkill.Global.FieldCommand.v1–v5` and `PlayerSkill.Global.QuickScavanger.v1–v5`** —
+ten tags, zero assets behind either name anywhere in the pak, and referenced by nothing but
+`DT_PlayerSkillTags` itself. The `Global` namespace also matches what these nodes are: shared across
+all six roots.
+
+Residual risk, stated plainly: if the developers ever ship Field Command or Quick Scavenger, a player
+who bought our nodes will appear to own those skills. That is the price of not touching the tag list,
+and it is a smaller and more local failure than a net-index desync. Re-check on each game update.
+
+Mirror the shipped pattern when authoring: the GE grants **both** the borrowed skill tag (so the
+purchase registers the way every stock skill does) **and** the functional tag — `Ability.HitReactionBlocked`
+for the capstone, nothing extra for the UE4SS-honored nodes.
+
 Grafting: append each line's entry node to the `ChildSkills` of **all six** character roots
 (`SD_Skill_EarlyAccess_{ScavGirl_ROOT,OldMan_Root,BagMan_Root,Gunhead_Root,MaskMan_Root,Shaman_Root}`) via
 the `skillpatch` cross-package import trick from ScavgirlCarryPerks. All six is required because Gunhead's
