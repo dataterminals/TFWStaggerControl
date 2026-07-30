@@ -2,6 +2,7 @@
 //
 //   skillpatch inspect <in.uasset> <usmap>
 //   skillpatch imports <in.uasset> <usmap>
+//   skillpatch dump    <in.uasset> <usmap>                                          (recursive property tree)
 //   skillpatch patch   <in.uasset> <usmap> <out.uasset> <removeName> ...            (remove children by name)
 //   skillpatch add     <in.uasset> <usmap> <out.uasset> "<pkgPath>|<objName>" ...   (append cross-package children)
 //
@@ -13,6 +14,7 @@
 using UAssetAPI;
 using UAssetAPI.ExportTypes;
 using UAssetAPI.PropertyTypes.Objects;
+using UAssetAPI.PropertyTypes.Structs;
 using UAssetAPI.UnrealTypes;
 using UAssetAPI.Unversioned;
 
@@ -46,6 +48,56 @@ class Program
             }
             foreach (var e in normals)
                 Console.WriteLine($"[export {S(e.ObjectName)}] class={NameOf(e.ClassIndex)}");
+            return 0;
+        }
+
+        if (mode == "dump")
+        {
+            // Recursive property tree. Authoring a clone means editing nested structs (a GE's granted
+            // tags sit two levels down, in two separate containers), and guessing how UAssetAPI models
+            // them is how you corrupt an asset. Look first.
+            string ValueString(PropertyData p)
+            {
+                var prop = p.GetType().GetProperty("Value");
+                var v = prop?.GetValue(p);
+                if (v == null) return "<null>";
+                if (v is System.Collections.IEnumerable en && v is not string)
+                    return "[" + string.Join(", ", en.Cast<object>().Select(x => x?.ToString() ?? "null")) + "]";
+                return v.ToString();
+            }
+
+            void DumpProp(PropertyData p, string ind)
+            {
+                switch (p)
+                {
+                    case StructPropertyData sp:
+                        Console.WriteLine($"{ind}{S(p.Name)} : Struct<{S(sp.StructType)}>");
+                        foreach (var c in sp.Value) DumpProp(c, ind + "  ");
+                        break;
+                    case ArrayPropertyData ap:
+                        Console.WriteLine($"{ind}{S(p.Name)} : Array<{S(ap.ArrayType)}>[{ap.Value.Length}]");
+                        foreach (var c in ap.Value) DumpProp(c, ind + "  ");
+                        break;
+                    case ObjectPropertyData op:
+                        Console.WriteLine($"{ind}{S(p.Name)} : Object -> {NameOf(op.Value)}");
+                        break;
+                    default:
+                        Console.WriteLine($"{ind}{S(p.Name)} : {p.GetType().Name} = {ValueString(p)}");
+                        break;
+                }
+            }
+
+            for (int i = 0; i < asset.Exports.Count; i++)
+            {
+                var ex = asset.Exports[i];
+                Console.WriteLine($"[export {i}] {S(ex.ObjectName)}  class={NameOf(ex.ClassIndex)}  outer={NameOf(ex.OuterIndex)}  type={ex.GetType().Name}");
+                if (ex is NormalExport ne) foreach (var p in ne.Data) DumpProp(p, "    ");
+            }
+            // The name map matters for cloning: export names and the package path live here, so a
+            // rename is mostly "rewrite these entries" rather than "rebuild the asset".
+            var names = asset.GetNameMapIndexList();
+            Console.WriteLine($"[names] {names.Count} entries");
+            for (int i = 0; i < names.Count; i++) Console.WriteLine($"    name[{i}] {names[i].Value}");
             return 0;
         }
 
