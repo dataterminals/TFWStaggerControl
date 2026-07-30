@@ -4,10 +4,11 @@
 return {
     -- Master switch. "off" = do nothing. "blanket" = suppress ALL combat stagger (the proven-simple
     -- path: 7/7 live activations cancelled). "selective" = per-family control: each stagger is
-    -- classified by what caused it and suppressed iff its family is ticked below (v0.1.6 defers the
-    -- cancel to the damage line that lands ~0.5 ms after activation). With the default list below,
-    -- selective should FEEL identical to blanket — plain gunfire never staggers anyway — while
-    -- exercising the per-type machinery end to end.
+    -- classified by what caused it and suppressed iff its family is ticked below. Selective went
+    -- 6/7 live in the v0.1.6 round; v0.1.7 closes the miss (the triggering damage line can land just
+    -- BEFORE the activation as well as just after, so it now checks both sides). With the default
+    -- list below, selective should FEEL identical to blanket — plain gunfire never staggers anyway —
+    -- while exercising the per-type machinery end to end.
     mode = "selective",   -- "off" | "blanket" | "selective"
 
     -- PART 1 — damage-type families to always ignore stagger from (used when mode == "selective").
@@ -54,8 +55,11 @@ return {
     -- WPN_AI_RFL01_LowTech, WPN_SHG05_AI, WPN_Exo_LeftStubbyGun (prefix fallback),
     -- WPN_Europa_Merkava_Machinegun, WPN_Drone; explosive: WPN_GRL00; heavy: WPN_20mmTurret,
     -- WPN_MediumMech_MiniGun_Rear + WPN_MediumMech_LongRifle (via "Mech" — both carry the native
-    -- knockdown type); melee: BP_AI_Eurasia_Crawler. Explosions arrive causer=nil but with the REAL
-    -- type class, so the type table above catches them. The rest are educated guesses.
+    -- knockdown type); melee: BP_AI_Eurasia_Crawler and BP_AI_Eurasia_Cyborg. The CYBORG is the one
+    -- confirmed infantry melee that actually FIRES the hit-react (250 dmg, engine-base DamageType —
+    -- the Crawler never did), which is why the "BP_AI_" needle is load-bearing, not a guess.
+    -- Explosions arrive causer=nil but with the REAL type class, so the type table above catches
+    -- them; mech melee likewise arrives as a real BP_MeleeDamage_FW_C. The rest are educated guesses.
     causer_classes = {
         { family = "explosive", needles = { "WPN_GRL", "Grenade", "RPG", "Rocket", "Explos", "Barrel", "Mortar", "Mine" } },
         { family = "heavy",     needles = { "Tank", "Turret", "Cannon", "Artil", "Mech" } },

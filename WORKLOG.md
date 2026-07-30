@@ -1,5 +1,51 @@
 # WORKLOG
 
+## 2026-07-30 — selective goes 6/7 live; the ordering is TWO-SIDED; v0.1.7 looks behind
+
+Three v0.1.6 logs from fenix (one dead session, two with combat). Selective mode's first live outing:
+
+- **6/7 activations cancelled, 0–1 ms each.** Five explosive knockbacks (`via=type`) and one
+  medium-mech rear minigun (`via=causer` → heavy). The park-then-classify machinery resolves
+  essentially instantly; the deferred-cancel gamble paid off. Fenix perceived **zero staggers across
+  all three sessions**, so selective passes the felt test it was built to answer.
+- **The 7th leaked, and it rewrites the ordering model.** A cyborg melee logged its
+  `ReceiveAnyDamage` **0.67 ms BEFORE** its own activation — the reverse of the 7/7 explosive
+  ordering. v0.1.6 only looks forward, so it parked, waited for a line already gone, and expired at
+  412 ms (`pending hit-react expired unresolved — allowed`). The correct answer was printed on the
+  very next line the whole time: `prev_family=melee`, which is ticked.
+- **The old trigger model is dead.** "The GA fires ONLY on `FWKnockDownDamageType` lineage" is
+  falsified: the cyborg hit is engine-base `Default__DamageType` (`super=Object`, `amt=250`) and
+  fired the hit-react anyway. So the event is sent from inside damage processing on both paths —
+  what differs is whether it goes out before or after the AnyDamage broadcast.
+- **v0.1.1's mystery melee staggerer is finally named: `BP_AI_Eurasia_Cyborg_C`.** The Crawler
+  (v0.1.4) never triggered it; the Cyborg does. The config `"BP_AI_"` needle is therefore
+  load-bearing, not a guess. Also new: `BP_MeleeDamage_FW_C` arrives with its REAL type on mech melee
+  (`BP_Mech_MedMech_C`, 4482→5000 dmg killshot, no GA — death path again).
+- **Tester corroboration is soft, deliberately recorded as such.** Asked directly, fenix recalled one
+  cyborg melee and "I do not see stagers" — but the log has two cyborg lines (250 @ 20:38:30.018,
+  205 @ 20:38:32.414), and it was a three-source firefight. Treat as "the leak isn't dramatic", not
+  as "no stagger occurred". Either it played and he missed it, or internal gating ate it; we don't
+  control which, which is the whole argument for fixing it.
+
+**v0.1.7 — the two-sided build:**
+- Selective now **looks behind first** (`last_damage.at` stamped; `LOOKBEHIND_WINDOW_S = 0.005`),
+  then parks for the forward line exactly as before. Look-behind is deliberately **cancel-only**: a
+  blocking family kills the ability on the spot, anything else falls through to the parked path, so a
+  bullet that merely lands inside the window can never cause a leak.
+- Window is not a close call: forward gaps ran 0.25–0.37 ms, the backward gap 0.67 ms, and the
+  nearest *non-trigger* prior damage before any parked activation was **18.5 s**. Residual risk is a
+  coincident round during sustained fire (~186 ms cadence → ~3%), which cancel-only defuses.
+- `hit-react:` line now prints `prev_age`, which is the field that distinguishes a trigger from a
+  stale hit. Note for when Part 2 lands: a non-blocking look-behind followed by a forward decision
+  rolls the graded chance twice.
+- **Verified offline before shipping** (`scratchpad/replay.lua` + `synth.lua`): a stubbed-UE4SS
+  harness replays fenix's exact event/timing sequence. v0.1.6 reproduces **6/7 and the 412 ms
+  expiry** — matching the live log — and v0.1.7 gives **7/7**, catching the cyborg via
+  `look-behind 0.7 ms`. Seven adversarial scenarios pass (coincident bullet, outside-window, family
+  unticked, ClientRestart). Re-run against the code extracted from the shipped zip.
+- **Next round ask:** play normally, but get a cyborg into melee range a few times — that's the exact
+  unproven case. Any `expired unresolved` line reappearing = a third ordering neither of us has seen.
+
 ## 2026-07-26 (night) — ✅✅ SUPPRESSION PROVEN IN LIVE FIRE 7/7; trigger model + ordering nailed; v0.1.6 defers selective
 
 Three v0.1.5 logs from fenix (two Ashen Mesa sessions: guns/exo/mechs, then mech + drones). Headlines:

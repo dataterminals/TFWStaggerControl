@@ -4,12 +4,18 @@
 -- (Part 1) and (2) owned resistance skill tags (Part 2 graded/per-type). The static pak works without
 -- this file; this file adds per-type selectivity and graded % that pure data can't express.
 --
--- STATUS: suppression PROVEN in live fire — 7/7 hit-react activations cancelled (explosive knockback
--- ×5, medium-mech rear minigun ×2), tester felt zero staggers. Trigger model: the GA fires ONLY on
--- FWKnockDownDamageType-lineage hits; 100+ plain gun hits fired it zero times. Types arrive REAL for
--- knockdown/shotgun/fall hits and ERASED (base CDOs) for rapid-fire guns — classification uses type
--- first, else the DamageCauser actor. Ordering (7/7): activation precedes the hit's own
--- ReceiveAnyDamage by ~0.5 ms, so selective mode defers its cancel to the damage hook (v0.1.6).
+-- STATUS: suppression PROVEN in live fire — blanket 7/7, selective 6/7 (v0.1.6 round: 5 explosive
+-- knockback + 1 medium-mech rear minigun, cancelled in 0–1 ms; tester perceived zero staggers across
+-- all three sessions). Types arrive REAL for knockdown/shotgun/fall/mech-melee hits and ERASED (base
+-- CDOs) for rapid-fire guns and infantry melee — classification uses type first, else the
+-- DamageCauser actor.
+-- ORDERING IS TWO-SIDED — this is what leaked the 7th. The GameplayEvent is sent from inside damage
+-- processing, but WHERE differs by path: explosive/knockdown-weapon hits broadcast ReceiveAnyDamage
+-- ~0.3 ms AFTER the activation (7/7 over two rounds), infantry melee broadcasts it ~0.7 ms BEFORE
+-- (BP_AI_Eurasia_Cyborg_C, 1/1). v0.1.6 only looked forward, so the melee activation parked and
+-- expired unresolved. v0.1.7 looks BEHIND first, then parks. This also kills the old trigger model:
+-- the GA does NOT fire only on FWKnockDownDamageType lineage — the cyborg hit was engine-base
+-- DamageType (super=Object) and fired it anyway.
 -- KNOWN SEPARATE PATHS (not this ability, not suppressed): the physics launch/ragdoll ("fly away")
 -- and fall damage. Tools on-box: ConsoleCommandsMod `dump_object`/`set`, `FindAllOf`.
 
@@ -59,7 +65,10 @@ end
 
 -- Set on each incoming hit by the ReceiveAnyDamage capture; read back by the hit-react hook and by
 -- selective mode. Declared here (above the decision section) so all readers close over one local.
-local last_damage = { name = nil, family = "unknown" }
+-- `at` (v0.1.7) is what makes the look-behind expressible: sub-ms old = this activation's own
+-- trigger, seconds old = a stale unrelated hit. Live separation between those two cases is enormous
+-- (0.67 ms vs a nearest false candidate of 18.5 s), so the window below is not a close call.
+local last_damage = { name = nil, family = "unknown", at = nil }
 
 -- Does the player's ASC own a gameplay tag (exact match)?  >>> CONFIRM ON-BOX: HasMatchingGameplayTag
 -- is a UAbilitySystemComponent UFunction taking an FGameplayTag; building the tag struct from Lua may
@@ -115,8 +124,14 @@ end
 -- last_damage still holds the PREVIOUS hit — deciding there is off-by-one. So selective mode parks
 -- the live ability here and the damage hook (same frame, sub-ms later) classifies the real hit and
 -- cancels. Same-frame cancel means the montage never renders a frame before it dies.
+--
+-- v0.1.7 — …except the ordering isn't universal. One melee activation (cyborg) logged 0.67 ms AFTER
+-- its own damage line, so parking meant waiting for a line that had already gone by; it sat until an
+-- unrelated hit 412 ms later tripped the expiry and let it through. Selective now resolves from
+-- BOTH sides: look behind at last_damage first, then park for the forward line as before.
 local pending = { ability = nil, at = 0.0 }
-local PENDING_WINDOW_S = 0.10   -- the damage line lands <1 ms later; 100 ms is a generous ceiling
+local PENDING_WINDOW_S    = 0.10    -- forward: the damage line lands <1 ms later; 100 ms is generous
+local LOOKBEHIND_WINDOW_S = 0.005   -- backward: observed 0.67 ms; nearest false candidate was 18.5 s
 
 local function cancel_ability(ability, why)
     log("SUPPRESS hit-react — cancelling (" .. why .. ")")
@@ -204,6 +219,7 @@ local function on_receive_any_damage(self, Damage, DamageType, InstigatedBy, Dam
     end
     last_damage.name   = causer_class or type_name
     last_damage.family = family
+    last_damage.at     = os.clock()   -- v0.1.7: stamped so the activation hook can look behind
     log(("damage: amt=%s type=%s super=%s full=%s causer=%s (%s) family=%s via=%s"):format(
         tostring(amount), tostring(type_name), tostring(type_super), tostring(type_full),
         tostring(causer_class), tostring(causer_name), family, via))
@@ -222,6 +238,10 @@ local function on_receive_any_damage(self, Damage, DamageType, InstigatedBy, Dam
                 log(("allow hit-react — family=%s not blocked (deferred %.1f ms)"):format(family, age * 1000))
             end
         else
+            -- NB: `age` is measured against THIS damage line, which is the first thing that looks at
+            -- the parked ability — so a long age means "nothing came for that long", not that we
+            -- deliberated. After v0.1.7's look-behind this should be effectively unreachable; if it
+            -- shows up in a log, there's a third ordering we haven't seen.
             log(("pending hit-react expired unresolved (%.0f ms) — allowed"):format(age * 1000))
         end
     end
@@ -250,16 +270,33 @@ local function install_hooks()
                     end
                     if cls ~= HITREACT_ABILITY_CLASS then return end
                     local ability = self:get()
-                    -- NB: last_damage at this instant is the PREVIOUS hit — the trigger's own damage
-                    -- line lands ~0.5 ms from now (7/7 live activations). Logged for the record only.
-                    log(("hit-react: prev_damage=%s prev_family=%s mode=%s")
-                        :format(tostring(last_damage.name), tostring(last_damage.family), cfg.mode))
+                    -- v0.1.7: the trigger's own damage line can sit on EITHER side of this instant,
+                    -- so prev_age is the thing that tells a trigger from a stale hit — sub-ms means
+                    -- last_damage IS this activation's cause (melee ordering), seconds mean the real
+                    -- one is still ~0.3 ms in the future (explosive/knockdown ordering).
+                    local back_age = last_damage.at and (os.clock() - last_damage.at) or nil
+                    log(("hit-react: prev_damage=%s prev_family=%s prev_age=%s mode=%s"):format(
+                        tostring(last_damage.name), tostring(last_damage.family),
+                        back_age and ("%.1f ms"):format(back_age * 1000) or "n/a", cfg.mode))
                     if cfg.mode == "off" then return end
                     if cfg.mode == "blanket" then
                         cancel_ability(ability, "blanket")
                         return
                     end
-                    -- selective: park it; the damage hook classifies the real hit and decides.
+                    -- selective, LOOK BEHIND first. Deliberately cancel-only: a blocking family kills
+                    -- the ability on the spot, anything else falls through to the parked path. So a
+                    -- bullet that merely lands inside the window (rapid fire runs ~186 ms apart, ~3%
+                    -- odds) can never cause a leak — worst case it costs us nothing and the forward
+                    -- line still decides. (When Part 2's graded roll goes live, note that a
+                    -- non-blocking look-behind followed by a forward decision rolls twice.)
+                    if back_age and back_age <= LOOKBEHIND_WINDOW_S then
+                        local block, why = family_blocks(last_damage.family, ability)
+                        if block then
+                            cancel_ability(ability, ("%s, look-behind %.1f ms"):format(why, back_age * 1000))
+                            return
+                        end
+                    end
+                    -- otherwise park it; the damage hook classifies the real hit and decides.
                     pending.ability = ability
                     pending.at = os.clock()
                     log("hit-react pending — awaiting the damage line to classify")
@@ -314,6 +351,7 @@ if not ok then log("WARNING: could not register ClientRestart hook") end
 install_hooks()
 install_damage_hook()
 
-log("loaded v0.1.6 (deferred selective). mode=" .. cfg.mode
-    .. " — suppression PROVEN 7/7 live; selective now parks the activation and decides on the damage"
-    .. " line that lands ~0.5 ms later (activation-before-damage ordering, observed 7/7)")
+log("loaded v0.1.7 (two-sided selective). mode=" .. cfg.mode
+    .. " — v0.1.6 cancelled 6/7 live; the 7th was a cyborg melee whose damage line landed 0.67 ms"
+    .. " BEFORE the activation instead of after, so it parked and expired. Selective now looks behind"
+    .. " (<=5 ms, cancel-only) before parking for the forward line")
