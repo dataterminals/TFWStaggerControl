@@ -30,9 +30,22 @@ things pure data can't express (damage type is decided in native code, and there
 
 ## Status
 
-**Scaffolded; not yet game-verified.** The design is statically airtight but the core seam (owning
-`Ability.HitReactionBlocked` actually stops stagger) needs an in-game smoke test — see
-[`WORKLOG.md`](WORKLOG.md) for the 2-minute test and the open questions.
+**Part 1 (UE4SS) is proven in live fire. Part 2 (the pak) is not built yet.**
+
+Intercepting `GA_Player_HitReaction` and cancelling it does stop player stagger — verified on an
+independent machine across five tester rounds. Blanket mode cancelled 7/7 activations; per-type
+**selective** mode cancelled 6/7 in its first outing, and v0.1.7 closes the one miss (the triggering
+damage line can arrive on either side of the activation, and the previous build only looked one way).
+Current test build: [`dist/TFWStaggerControl_v0.1.7_manual.zip`](dist/TFWStaggerControl_v0.1.7_manual.zip).
+
+Damage families are classified from the damage-type class where it survives, and from the
+`DamageCauser` actor where it doesn't — both paths have called every live hit correctly so far.
+
+**Not suppressed, by design:** the physics launch that throws you ("fly away") and fall damage are
+separate systems, out of the hit-react seam's reach. Possible future work, separate hunt.
+
+The skill-tree pak is the remaining build work — `build.sh` steps 1–2 are ready, asset authoring
+isn't. Round-by-round evidence and open questions: [`WORKLOG.md`](WORKLOG.md).
 
 ## Layout
 
@@ -42,13 +55,17 @@ things pure data can't express (damage type is decided in native code, and there
 | `ue4ss/TFWStaggerControl/` | the Lua layer — drop into RE-UE4SS `Mods/` (or deploy via MO2). `Scripts/config.lua` is user-editable |
 | `pak/` | the static-pak source (skill-tree assets); built by `build.sh` |
 | `tools/skillpatch/` | UAssetAPI grafter (from ScavgirlCarryPerks) + the extensions this mod needs |
+| `tools/replay/` | offline harness: replays recorded tester timelines through `main.lua` with UE4SS stubbed |
 | `build.sh` | decode → author → graft → `retoc` pack → verify |
 | `dist/` | built pak output |
 
 ## Build
 
-- **UE4SS layer:** no build. Copy `ue4ss/TFWStaggerControl/` into your RE-UE4SS `Mods/`. Set
-  `Scripts/config.lua` `mode = "blanket"` first to smoke-test, then `"selective"`.
+- **UE4SS layer:** no build. Copy `ue4ss/TFWStaggerControl/` into your RE-UE4SS `Mods/` (or take a
+  ready-made zip from `dist/`). `Scripts/config.lua` ships `mode = "selective"`; `"blanket"` disables
+  all combat stagger, `"off"` makes it a pure logger.
+- **Decision logic:** `bash tools/replay/run.sh` replays recorded tester timelines through the real
+  `main.lua` against a stubbed UE4SS — catches ordering/classification regressions without a launch.
 - **Pak:** `bash build.sh` (needs `retoc`, the game, .NET 8 SDK, the datamine `.usmap`). Steps 1–2 are
   ready; the asset-authoring step (3–5) is the next work item — see `tools/README.md`.
 

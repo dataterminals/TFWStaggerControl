@@ -11,8 +11,7 @@ A two-part stagger mod for **The Forever Winter** (UE 5.4.2, build 24097213):
 2. **A skill-tree line** that raises resistance to being staggered (per-type immunity + graded %% + a
    full-immunity capstone).
 
-Repo is **public**: https://github.com/dataterminals/TFWStaggerControl (`master`, in sync, 2 scaffold commits
-+ this handoff).
+Repo is **public**: https://github.com/dataterminals/TFWStaggerControl (`master`).
 
 ## The one load-bearing finding (do NOT re-derive — it's proven)
 
@@ -40,38 +39,49 @@ Full evidence: [`docs/findings.md`](docs/findings.md). Architecture + rationale:
   owned skill tags and blocks per-type / by %. `mode="blanket"` = disable all stagger (the pak-only equivalent
   and the seam smoke-test).
 
-## Current state (2026-07-24)
+## Current state (2026-07-30)
 
 | Piece | State |
 |---|---|
 | Docs (`design-notes.md`, `findings.md`) | ✅ done |
-| UE4SS layer (`ue4ss/TFWStaggerControl/Scripts/{main,config}.lua`) | ✅ first cut, `mode="blanket"`, **unverified** |
-| `tools/skillpatch/` (UAssetAPI grafter from ScavgirlCarryPerks) | ✅ copied; needs clone-and-edit + DataTable-append extension |
+| UE4SS layer (`ue4ss/TFWStaggerControl/Scripts/{main,config}.lua`) | ✅ **v0.1.7, proven in live fire** — blanket 7/7, selective 6/7 then patched |
+| `tools/replay/` (offline decision-logic harness) | ✅ replays recorded tester timelines against a stubbed UE4SS |
+| `tools/skillpatch/` (UAssetAPI grafter from ScavgirlCarryPerks) | ✅ copied; **needs clone-and-edit + DataTable-append extension** |
 | Pak build (`build.sh`) | ⚠️ steps 1–2 ready; asset-authoring (3–5) not built |
-| **Staged on MO2** | ✅ `<MO2 instance>\mods\TFWStaggerControl\` (Root Builder mod) — **not yet enabled** (MO2 was open; `modlist.txt` untouched) |
-| **In-game verification** | ❌ **none — this is the blocker** |
+| **In-game verification (Part 1)** | ✅ five tester rounds on an independent machine |
+| **In-game verification (Part 2)** | ❌ nothing to verify yet — the pak doesn't exist |
 
-## THE immediate next action — the 2-minute smoke test
+**Part 1 is done pending one confirmation round on v0.1.7.** Test builds ship as
+`dist/TFWStaggerControl_v0.1.X_manual.zip` (game-root-relative tree + a plain-language install note);
+the tester extracts to the game root, plays, and sends back `Binaries\Win64\ue4ss\UE4SS.log`.
 
-Everything downstream assumes owning `Ability.HitReactionBlocked` actually stops stagger. Prove it first:
+### What Part 1 proved (so you don't re-litigate it)
 
-1. In MO2 (instance **The Forever Winter**, profile **Default**): **F5** to refresh, tick **TFWStaggerControl**
-   (near the `TFWWorkbench`/`RE-UE4SS` cluster). `config.lua` is already `mode="blanket"`.
-2. Launch through MO2 (Root Builder `autobuild` copies it into `Binaries\Win64` on launch).
-3. Take an explosion / melee hit — **do you still stagger?**
+- Cancelling `GA_Player_HitReaction` on activation **does** stop the stagger. Blanket cancelled 7/7.
+- The BP-generated class path must be hooked, and **lazily** — the engine-base `K2_ActivateAbility`
+  hook registers but never fires, and the BP class isn't loaded until the player pawn exists.
+- **Damage family is recoverable**, which is what makes per-type control real: the damage-type class
+  survives for knockdown/shotgun/fall/mech-melee hits, and where it's erased the `DamageCauser` actor
+  names itself (`BP_WPN_<code>`, or the attacking pawn `BP_AI_*` for infantry melee).
+- **The trigger event's ordering is two-sided.** Explosive/knockdown hits broadcast `ReceiveAnyDamage`
+  ~0.3 ms *after* the activation; infantry melee broadcasts it ~0.7 ms *before*. v0.1.7 checks both.
+- Fall damage and the physics launch ("fly away") are **separate systems** and are not suppressed.
 
-**Read the log** MO2 catches at:
-`<MO2 instance>\overwrite\Root\Windows\ForeverWinter\Binaries\Win64\ue4ss\UE4SS.log`
-- Look for `Mod 'TFWStaggerControl' has enabled.txt, starting mod`, then `[TFWStaggerControl] loaded. mode=blanket`
-  and `hooked …` vs `FAILED to hook …`.
+## THE immediate next action — build the pak (Part 2)
 
-**Interpreting it:**
-- No stagger in-game → seam confirmed → **finish the pak** (extend `skillpatch`: clone-and-edit + DataTable
-  row append; author the `GE_/SD_` StaggerResist assets; graft the 6 roots; `retoc` pack + `verify`) and lock
-  the hook target in `main.lua`.
-- `FAILED to hook`, or hooks register but you still stagger → the hook UFunction target is wrong (expected on
-  first try — see the `>>> CONFIRM ON-BOX` markers in `main.lua`). Fix via `dump_object` on a live
-  `GA_Player_HitReaction_C` (ConsoleCommandsMod) to find the real activation function, then re-hook.
+Part 1 no longer blocks anything. The remaining work is the static skill tree:
+
+1. **Extend `tools/skillpatch/`** with clone-and-edit + DataTable row append (see `tools/README.md`).
+2. **Author the assets** — a tag-granting `GE_` per node (pattern: `GE_Skill_Global_Stamina_Lvl_01`) and
+   the `SD_` skill definitions.
+3. **Graft onto all 6 character roots**, register the new tags in `DT_PlayerSkillTags`.
+4. **Pack + verify** (`retoc verify`), then in-game: node unlocks, persists, and the capstone actually
+   grants immunity with **UE4SS switched off** — that's the test that matters, since the capstone is
+   the whole no-dependency promise.
+5. **Multiplayer check** — confirm suppression is local-only and not host-corrected.
+
+Blocked on author decisions before step 2 (see below): node names/descriptions/icons, cost curve,
+number of `%` tiers.
 
 ## Where everything lives (sibling repos & tools — paths relative to this repo's cwd)
 
